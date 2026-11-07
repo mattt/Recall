@@ -169,6 +169,22 @@ import Testing
     #expect(tied.map(\.id) == [newer.id, older.id])
   }
 
+  @Test func rankingsDescribeTheReturnedText() async throws {
+    let gate = Gate()
+    let store = try MemoryStore.inMemory(embedder: GatedEmbedder(gates: ["cat": gate]))
+    let memory = try await store.remember("The cat sleeps on the sofa.")
+    let recall = Task { try await store.recall("cat") }
+    await gate.arrival()
+
+    // Change the matching text while the query's vector is being made.
+    try await store.update(memory.id, text: "The dog barks at the door.")
+    gate.open()
+    let results = try await recall.value
+    let result = try #require(results.first { $0.id == memory.id })
+    #expect(result.memory.text == "The dog barks at the door.")
+    #expect(result.keywordRank == nil)
+  }
+
   @Test func limitTruncatesResults() async throws {
     let (store, _) = try await makeStore()
     #expect(try await store.recall("cat", limit: 2).count == 2)

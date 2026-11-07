@@ -104,6 +104,22 @@ final class Database {
     }
   }
 
+  /// Runs `body` in a read transaction,
+  /// so that every statement in it reads the same snapshot of the database.
+  ///
+  /// `body` must not write.
+  func read<T>(_ body: () throws -> T) throws -> T {
+    try execute("BEGIN DEFERRED")
+    do {
+      let value = try body()
+      try execute("COMMIT")
+      return value
+    } catch {
+      try? execute("ROLLBACK")
+      throw error
+    }
+  }
+
   /// The number of rows that the most recent statement changed.
   var changes: Int {
     Int(sqlite3_changes(handle))

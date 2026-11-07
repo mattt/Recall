@@ -181,22 +181,29 @@ extension MemoryStore {
     try configuration.validate()
     guard limit > 0 else { return [] }
 
-    let keyword =
-      configuration.keywordWeight > 0
-      ? try keywordSearch(query, limit: configuration.candidateLimit) : []
-    let vector =
-      configuration.vectorWeight > 0
-      ? try await vectorSearch(
-        query,
-        limit: configuration.candidateLimit,
-        minimumSimilarity: configuration.minimumSimilarity
-      ) : []
-
-    // Load each candidate once.
-    // A memory that was forgotten during the vector search is skipped.
-    var memories: [UUID: Memory] = [:]
-    for id in keyword + vector.map(\.id) where memories[id] == nil {
-      memories[id] = try memory(id)
+    // Finish the work that suspends before reading any rankings.
+    // Another task can change memories while the embedder runs,
+    // so the rankings and the memories must come from one later snapshot.
+    let queryVector =
+      configuration.vectorWeight > 0 ? try await queryVector(for: query) : nil
+    let (keyword, vector, memories) = try database.read {
+      let keyword =
+        configuration.keywordWeight > 0
+        ? try keywordSearch(query, limit: configuration.candidateLimit) : []
+      let vector =
+        try queryVector.map {
+          try vectorSearch(
+            $0,
+            limit: configuration.candidateLimit,
+            minimumSimilarity: configuration.minimumSimilarity
+          )
+        } ?? []
+      // Load each candidate once.
+      var memories: [UUID: Memory] = [:]
+      for id in keyword + vector.map(\.id) where memories[id] == nil {
+        memories[id] = try memory(id)
+      }
+      return (keyword, vector, memories)
     }
 
     let recency =

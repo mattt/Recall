@@ -335,11 +335,29 @@ public actor MemoryStore {
     limit: Int,
     minimumSimilarity: Float? = nil
   ) async throws -> [(id: UUID, similarity: Float)] {
-    guard limit > 0, let embedder else { return [] }
+    guard limit > 0, let vector = try await queryVector(for: query) else { return [] }
+    return try vectorSearch(vector, limit: limit, minimumSimilarity: minimumSimilarity)
+  }
+
+  /// Embeds any stale memories, then returns the unit vector of `query`,
+  /// or `nil` if the store has no embedder
+  /// or the query's vector can't be normalized.
+  func queryVector(for query: String) async throws -> [Float]? {
+    guard let embedder else { return nil }
     try await reembed()
     // A query vector that can't be normalized, such as the vector of punctuation,
     // matches nothing; it isn't an error.
-    guard let vector = Vector.normalized(try await embedder.embed(query)) else { return [] }
+    return Vector.normalized(try await embedder.embed(query))
+  }
+
+  /// Returns the identifiers of the memories whose vectors are most similar to a unit vector,
+  /// most similar first, with their cosine similarities.
+  func vectorSearch(
+    _ vector: [Float],
+    limit: Int,
+    minimumSimilarity: Float?
+  ) throws(MemoryStoreError) -> [(id: UUID, similarity: Float)] {
+    guard limit > 0, let embedder else { return [] }
     let results = try nearest(to: vector, embedder: embedder.identifier, limit: limit)
     guard let minimumSimilarity else { return results }
     return results.filter { $0.similarity >= minimumSimilarity }
