@@ -139,9 +139,12 @@ the store doesn't save the memory.
 ## Cancellation
 
 Each asynchronous method of `MemoryStore` checks for cancellation before it starts.
-`remember` and `update` check again after the embedder returns
-and before they commit,
-so a canceled call throws `CancellationError` and saves nothing.
+`remember` and `update` check again inside their write transaction,
+after they take the write lock and immediately before they commit.
+A call that is canceled by then rolls back,
+throws `CancellationError`, and saves nothing.
+The check before the commit is the decision point:
+a call that is canceled after it saves its change and returns normally.
 
 Re-embedding is shared work.
 When several calls to `reembed()` or `recall` need it at the same time,

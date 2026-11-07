@@ -30,7 +30,10 @@ let package = Package(
     ),
     .testTarget(
       name: "RecallTests",
-      dependencies: ["Recall"]
+      dependencies: [
+        "Recall",
+        .target(name: "CSQLite", condition: .when(platforms: [.linux])),
+      ]
     ),
   ],
   swiftLanguageModes: [.v6]

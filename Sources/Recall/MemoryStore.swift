@@ -18,9 +18,12 @@ import Foundation
 /// ## Cancellation
 ///
 /// Each asynchronous method checks for cancellation before it starts.
-/// A method that writes checks again after the embedder returns,
-/// before it commits,
-/// so a canceled call throws `CancellationError` and saves nothing.
+/// A method that writes checks again inside its write transaction,
+/// after it takes the write lock and immediately before it commits.
+/// If the task is canceled by then,
+/// the method rolls back, throws `CancellationError`, and saves nothing.
+/// The check before the commit is the decision point:
+/// a call that is canceled after it saves its change and returns normally.
 /// Re-embedding is the exception that ``reembed()`` describes.
 public actor MemoryStore {
   let database: Database
@@ -104,8 +107,7 @@ public actor MemoryStore {
     try Self.validate(text)
     let memory = Memory(text: text, createdAt: createdAt, source: source, metadata: metadata)
     let vector = try await embedding(for: text)
-    try Task.checkCancellation()
-    try database.transaction { () throws(MemoryStoreError) in
+    try database.cancellableTransaction { () throws(MemoryStoreError) in
       let rowid = try insert(memory)
       if let vector { try saveEmbedding(vector, rowid: rowid) }
     }
@@ -135,8 +137,7 @@ public actor MemoryStore {
       throw MemoryStoreError.notFound(memory.id)
     }
     let vector = existing.text == memory.text ? nil : try await embedding(for: memory.text)
-    try Task.checkCancellation()
-    try database.transaction { () throws(MemoryStoreError) in
+    try database.cancellableTransaction { () throws(MemoryStoreError) in
       let rowid = try save(memory)
       if let vector { try saveEmbedding(vector, rowid: rowid) }
     }
@@ -160,8 +161,7 @@ public actor MemoryStore {
     guard let existing = try memory(id) else { throw MemoryStoreError.notFound(id) }
     if existing.text != text {
       let vector = try await embedding(for: text)
-      try Task.checkCancellation()
-      try database.transaction { () throws(MemoryStoreError) in
+      try database.cancellableTransaction { () throws(MemoryStoreError) in
         try database.prepare("UPDATE memories SET text = ? WHERE id = ?")
           .bind(.text(text), .text(id.uuidString))
           .step()
@@ -363,6 +363,8 @@ public actor MemoryStore {
         // Another task or connection can change or delete the memory while the embedder runs.
         // Check it and save the vector in one write transaction,
         // so that no other write can come between them.
+        // No caller can cancel this shared task,
+        // so the transaction doesn't check for cancellation.
         let saved = try database.transaction { () throws(MemoryStoreError) -> Bool in
           guard try isCurrent(row) else { return false }
           try saveEmbedding(vector, rowid: row.rowid)

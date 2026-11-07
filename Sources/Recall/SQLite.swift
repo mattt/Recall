@@ -15,7 +15,10 @@ private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 /// `MemoryStore` owns one instance
 /// and uses it only from the actor's isolation domain.
 final class Database {
-  private let handle: OpaquePointer
+  /// The connection handle.
+  ///
+  /// Only this file and tests use it directly.
+  let handle: OpaquePointer
 
   /// Opens the database at a file URL,
   /// or a private in-memory database if the URL is `nil`.
@@ -96,6 +99,29 @@ final class Database {
     try execute("BEGIN IMMEDIATE")
     do {
       let value = try body()
+      try execute("COMMIT")
+      return value
+    } catch {
+      try? execute("ROLLBACK")
+      throw error
+    }
+  }
+
+  /// Runs `body` in a write transaction that commits only if the current task isn't canceled.
+  ///
+  /// The transaction checks for cancellation after it takes the write lock,
+  /// which can wait for another connection,
+  /// and again immediately before `COMMIT`.
+  /// If the task is canceled at either check,
+  /// the transaction rolls back and throws `CancellationError`.
+  /// The check before `COMMIT` is the decision point:
+  /// a cancellation that arrives after it doesn't undo the commit.
+  func cancellableTransaction<T>(_ body: () throws(MemoryStoreError) -> T) throws -> T {
+    try execute("BEGIN IMMEDIATE")
+    do {
+      try Task.checkCancellation()
+      let value = try body()
+      try Task.checkCancellation()
       try execute("COMMIT")
       return value
     } catch {
