@@ -49,6 +49,9 @@ try await store.forget(recent[0].id)
 so one store can serve many tasks.
 Each store has its own SQLite connection,
 and two stores can open the same file.
+The stores can use different embedders:
+the file keeps one vector for each memory from each embedder,
+so one store doesn't replace the vectors of another.
 To keep memories only in memory,
 use `MemoryStore.inMemory(embedder:)`.
 
@@ -123,8 +126,11 @@ The identifier must change whenever the vectors would change,
 for example when you change the model or its version.
 The store saves each vector with the embedder's identifier and dimension.
 When you open a store with an embedder that has a different identifier,
-the store embeds each memory again before its next vector search.
+the store embeds each memory that has no vector from that embedder
+before its next vector search.
 Call `reembed()` to do this work earlier.
+Vectors from other embedders stay in the file,
+and a change to the text of a memory deletes all of its vectors.
 All vectors from one embedder must have the same number of elements.
 
 If an embedder throws while the store saves a memory,

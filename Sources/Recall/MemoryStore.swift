@@ -7,6 +7,9 @@ import Foundation
 /// Each store has its own connection to the database.
 /// Two stores can open the same file;
 /// SQLite serializes their writes.
+/// The stores can use different embedders:
+/// the database keeps one vector for each memory from each embedder,
+/// so one store doesn't replace the vectors of another.
 ///
 /// If you supply an ``Embedder``,
 /// the store also keeps a vector for each memory
@@ -230,6 +233,8 @@ public actor MemoryStore {
   /// Embeds each memory that has no vector from the current embedder,
   /// and returns the number of memories that it embedded.
   ///
+  /// Vectors from other embedders stay in the database.
+  ///
   /// Recall calls this method before a vector search,
   /// so you don't need to call it.
   /// Call it after you open a store with a new embedder
@@ -253,8 +258,9 @@ public actor MemoryStore {
     let statement = try database.prepare(
       """
       SELECT count(*) FROM memories m
-      LEFT JOIN embeddings e ON e.memory_rowid = m.rowid
-      WHERE e.memory_rowid IS NULL OR e.embedder IS NOT ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM embeddings e WHERE e.memory_rowid = m.rowid AND e.embedder = ?
+      )
       """
     )
     try statement.bind(.text(embedder.identifier))
@@ -272,10 +278,11 @@ public actor MemoryStore {
       let statement = try database.prepare(
         """
         SELECT m.rowid, m.id, m.text FROM memories m
-        LEFT JOIN embeddings e ON e.memory_rowid = m.rowid
-        WHERE (e.memory_rowid IS NULL OR e.embedder IS NOT ?) AND m.rowid > ?
+        WHERE NOT EXISTS (
+          SELECT 1 FROM embeddings e WHERE e.memory_rowid = m.rowid AND e.embedder = ?1
+        ) AND m.rowid > ?2
         ORDER BY m.rowid
-        LIMIT ?
+        LIMIT ?3
         """
       )
       try statement.bind(.text(embedder.identifier), .integer(lastRowid), .integer(batchSize))
@@ -381,6 +388,9 @@ public actor MemoryStore {
   }
 
   /// Saves the vector of a memory from the current embedder.
+  ///
+  /// The vector replaces an earlier vector from the same embedder
+  /// and leaves vectors from other embedders in place.
   private func saveEmbedding(_ vector: [Float], rowid: Int) throws(MemoryStoreError) {
     guard let embedder else { return }
     let identifier = embedder.identifier

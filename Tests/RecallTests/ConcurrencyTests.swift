@@ -63,6 +63,28 @@ import Testing
     #expect(results.filter { $0.keywordRank != nil }.count == 50)
   }
 
+  @Test func storesWithDifferentEmbeddersKeepTheirVectors() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    let firstEmbedder = TestEmbedder(identifier: "first")
+    let secondEmbedder = TestEmbedder(identifier: "second", dimension: 8)
+    let first = try MemoryStore(url: url, embedder: firstEmbedder)
+    let second = try MemoryStore(url: url, embedder: secondEmbedder)
+    let memory = try await first.remember("tea with milk")
+    #expect(try await second.reembed() == 1)
+
+    // Each store keeps finding the memory with its own vectors,
+    // and neither store embeds it again.
+    for _ in 0..<3 {
+      #expect(try await first.recall("tea").first?.vectorRank == 1)
+      #expect(try await second.recall("tea").first?.vectorRank == 1)
+    }
+    #expect(try await first.staleEmbeddingCount() == 0)
+    #expect(try await second.staleEmbeddingCount() == 0)
+    #expect(firstEmbedder.calls.all.filter { $0 == memory.text }.count == 1)
+    #expect(secondEmbedder.calls.all.filter { $0 == memory.text }.count == 1)
+  }
+
   @Test func storesOpenedTogetherMigrateOnce() async throws {
     let directory = try TemporaryDirectory()
     let url = directory.url.appending(path: "memories.sqlite")

@@ -6,7 +6,9 @@
 ///
 /// The store saves each vector with the embedder's ``identifier``.
 /// When you open a store with an embedder that has a different identifier,
-/// the store embeds the memories again.
+/// the store embeds each memory that has no vector from that embedder.
+/// It keeps the vectors from other embedders,
+/// so stores with different embedders can share one database.
 /// Change the identifier whenever a change to the model or its settings
 /// would change the vectors it produces.
 ///
