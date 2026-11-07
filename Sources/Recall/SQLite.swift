@@ -57,6 +57,26 @@ final class Database {
     }
   }
 
+  /// Puts a file database in write-ahead logging mode,
+  /// so that readers don't block the writer.
+  ///
+  /// SQLite can return `SQLITE_BUSY` from this change
+  /// without calling the busy handler
+  /// when another connection opens the file at the same time,
+  /// so this method retries for up to five seconds.
+  func enableWriteAheadLog() throws(MemoryStoreError) {
+    let deadline = Date().addingTimeInterval(5)
+    while true {
+      do {
+        let statement = try prepare("PRAGMA journal_mode = WAL")
+        try statement.step()
+        return
+      } catch .sqlite(let code, _) where code & 0xFF == SQLITE_BUSY && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.01)
+      }
+    }
+  }
+
   /// Compiles one SQL statement.
   func prepare(_ sql: String) throws(MemoryStoreError) -> Statement {
     var statement: OpaquePointer?

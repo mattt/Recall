@@ -54,7 +54,7 @@ public actor MemoryStore {
   ) throws(MemoryStoreError) {
     self.embedder = embedder
     if isFile {
-      try database.execute("PRAGMA journal_mode = WAL")
+      try database.enableWriteAheadLog()
     }
     try database.execute("PRAGMA foreign_keys = ON")
     try Schema.migrate(database)
@@ -286,7 +286,9 @@ public actor MemoryStore {
   ) async throws -> [(id: UUID, similarity: Float)] {
     guard limit > 0, let embedder else { return [] }
     try await reembed()
-    guard let vector = try await embedding(for: query) else { return [] }
+    // A query vector that can't be normalized, such as the vector of punctuation,
+    // matches nothing; it isn't an error.
+    guard let vector = Vector.normalized(try await embedder.embed(query)) else { return [] }
     let results = try nearest(to: vector, embedder: embedder.identifier, limit: limit)
     guard let minimumSimilarity else { return results }
     return results.filter { $0.similarity >= minimumSimilarity }

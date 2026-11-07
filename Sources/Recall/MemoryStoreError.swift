@@ -23,6 +23,9 @@ public enum MemoryStoreError: Error, Hashable, Sendable {
   /// or has a different dimension than the embedder's other vectors.
   case invalidEmbedding(embedder: String)
 
+  /// A ``RecallConfiguration`` has a value that can't produce meaningful scores.
+  case invalidConfiguration(String)
+
   /// The stored metadata of a memory isn't a JSON object of strings.
   case invalidMetadata(UUID)
 }
@@ -40,6 +43,8 @@ extension MemoryStoreError: LocalizedError {
       "A memory must contain text."
     case .invalidEmbedding(let embedder):
       "The embedder \(embedder) returned a vector that the store can't use."
+    case .invalidConfiguration(let reason):
+      "The recall configuration isn't valid. \(reason)"
     case .invalidMetadata(let id):
       "The metadata of memory \(id) isn't valid."
     }
