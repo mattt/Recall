@@ -602,8 +602,8 @@ private final class Waiter<T: Sendable>: @unchecked Sendable {
   /// or keeps it for ``finish(_:)``.
   func wait(_ continuation: CheckedContinuation<T, any Error>) {
     let result = lock.withLock {
-      if result == nil { self.continuation = continuation }
-      return result
+      if self.result == nil { self.continuation = continuation }
+      return self.result
     }
     if let result { continuation.resume(with: result) }
   }
