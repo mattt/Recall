@@ -95,6 +95,11 @@ public actor MemoryStore {
   /// Saves changes to the text, source, or metadata of a memory.
   ///
   /// The identifier and creation date don't change.
+  /// This method replaces all three fields with the values in `memory`,
+  /// so the last update to finish wins:
+  /// it discards a change that another call saved
+  /// after you read `memory`.
+  /// To change only the text, call ``update(_:text:)``.
   ///
   /// - Parameter memory: The memory with its new values.
   /// - Returns: The saved memory.
@@ -117,13 +122,29 @@ public actor MemoryStore {
 
   /// Replaces the text of a memory.
   ///
+  /// The source and metadata don't change,
+  /// even if another call changes them while the embedder runs.
+  ///
   /// - Returns: The saved memory.
-  /// - Throws: ``MemoryStoreError/notFound(_:)`` if the store has no memory with that identifier.
+  /// - Throws: ``MemoryStoreError/notFound(_:)`` if the store has no memory with that identifier,
+  ///   or any error from the embedder.
+  ///   If the embedder fails, the store doesn't save the change.
   @discardableResult
   public func update(_ id: UUID, text: String) async throws -> Memory {
-    guard var memory = try memory(id) else { throw MemoryStoreError.notFound(id) }
-    memory.text = text
-    return try await update(memory)
+    try Self.validate(text)
+    guard let existing = try memory(id) else { throw MemoryStoreError.notFound(id) }
+    if existing.text != text {
+      let vector = try await embedding(for: text)
+      try database.transaction { () throws(MemoryStoreError) in
+        try database.prepare("UPDATE memories SET text = ? WHERE id = ?")
+          .bind(.text(text), .text(id.uuidString))
+          .step()
+        guard database.changes > 0 else { throw .notFound(id) }
+        if let vector { try saveEmbedding(vector, rowid: rowid(of: id)) }
+      }
+    }
+    guard let memory = try memory(id) else { throw MemoryStoreError.notFound(id) }
+    return memory
   }
 
   /// Deletes a memory.

@@ -176,3 +176,48 @@ final class TemporaryDirectory: Sendable {
     #expect(loaded.metadata == ["": ""])
   }
 }
+
+@Suite struct UpdateConflictTests {
+  @Test func textUpdateKeepsMetadataSavedWhileEmbedding() async throws {
+    let gate = Gate()
+    let store = try MemoryStore.inMemory(embedder: GatedEmbedder(gates: ["new text": gate]))
+    var memory = try await store.remember("old text", source: "first")
+    let id = memory.id
+    let update = Task { try await store.update(id, text: "new text") }
+    await gate.arrival()
+
+    // Save other fields while the text update waits for its vector.
+    memory.source = "second"
+    memory.metadata = ["kind": "note"]
+    try await store.update(memory)
+    gate.open()
+    let updated = try await update.value
+
+    #expect(updated.text == "new text")
+    #expect(updated.source == "second")
+    #expect(updated.metadata == ["kind": "note"])
+    #expect(try await store.memory(memory.id) == updated)
+  }
+
+  @Test func textUpdateOfForgottenMemoryThrows() async throws {
+    let gate = Gate()
+    let store = try MemoryStore.inMemory(embedder: GatedEmbedder(gates: ["new text": gate]))
+    let memory = try await store.remember("old text")
+    let update = Task { try await store.update(memory.id, text: "new text") }
+    await gate.arrival()
+    try await store.forget(memory.id)
+    gate.open()
+    await #expect(throws: MemoryStoreError.notFound(memory.id)) {
+      try await update.value
+    }
+    #expect(try await store.count() == 0)
+  }
+
+  @Test func textUpdateRejectsEmptyText() async throws {
+    let store = try MemoryStore.inMemory()
+    let memory = try await store.remember("text")
+    await #expect(throws: MemoryStoreError.emptyText) {
+      try await store.update(memory.id, text: " ")
+    }
+  }
+}

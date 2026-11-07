@@ -58,3 +58,73 @@ final class CallCounter: @unchecked Sendable {
   var count: Int { lock.withLock { texts.count } }
   var all: [String] { lock.withLock { texts } }
 }
+
+/// An embedder that pauses on chosen texts until a test opens their gates.
+struct GatedEmbedder: Embedder {
+  let base: TestEmbedder
+  let gates: [String: Gate]
+
+  init(_ base: TestEmbedder = TestEmbedder(), gates: [String: Gate]) {
+    self.base = base
+    self.gates = gates
+  }
+
+  var identifier: String { base.identifier }
+
+  func embed(_ text: String) async throws -> [Float] {
+    await gates[text]?.pass()
+    return try await base.embed(text)
+  }
+}
+
+/// A one-time barrier that records when a task reaches it.
+///
+/// Waiting doesn't respond to cancellation,
+/// so a canceled task stays paused until the test calls ``open()``.
+final class Gate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var arrived = false
+  private var isOpen = false
+  private var arrivalWaiters: [CheckedContinuation<Void, Never>] = []
+  private var openWaiters: [CheckedContinuation<Void, Never>] = []
+
+  /// Records the arrival of a task, then waits until the gate opens.
+  func pass() async {
+    let waiters = lock.withLock {
+      arrived = true
+      defer { arrivalWaiters = [] }
+      return arrivalWaiters
+    }
+    for waiter in waiters { waiter.resume() }
+    await withCheckedContinuation { continuation in
+      let resume = lock.withLock {
+        if isOpen { return true }
+        openWaiters.append(continuation)
+        return false
+      }
+      if resume { continuation.resume() }
+    }
+  }
+
+  /// Waits until a task reaches the gate.
+  func arrival() async {
+    await withCheckedContinuation { continuation in
+      let resume = lock.withLock {
+        if arrived { return true }
+        arrivalWaiters.append(continuation)
+        return false
+      }
+      if resume { continuation.resume() }
+    }
+  }
+
+  /// Lets every waiting task and every later task through.
+  func open() {
+    let waiters = lock.withLock {
+      isOpen = true
+      defer { openWaiters = [] }
+      return openWaiters
+    }
+    for waiter in waiters { waiter.resume() }
+  }
+}
