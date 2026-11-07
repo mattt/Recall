@@ -163,6 +163,47 @@ import Testing
     #expect(try await store.reembed() == 1)
   }
 
+  @Test func reembeddingSkipsTextChangedByAnotherConnection() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    let other = try MemoryStore(url: url)
+    let memory = try await other.remember("cats")
+
+    let gate = Gate()
+    let base = TestEmbedder(vectors: ["cats": [1, 0], "dogs": [0, 1], "query": [0, 1]])
+    let store = try MemoryStore(url: url, embedder: GatedEmbedder(base, gates: ["cats": gate]))
+    let reembedding = Task { try await store.reembed() }
+    await gate.arrival()
+
+    // The other connection changes the text while the embedder has the old text.
+    try await other.update(memory.id, text: "dogs")
+    gate.open()
+    #expect(try await reembedding.value == 0)
+    #expect(try await store.staleEmbeddingCount() == 1)
+
+    // The next call embeds the new text.
+    #expect(try await store.reembed() == 1)
+    let results = try await store.vectorSearch("query", limit: 1)
+    #expect(results.first?.id == memory.id)
+    #expect(try #require(results.first?.similarity) > 0.99)
+  }
+
+  @Test func reembeddingSkipsMemoryForgottenByAnotherConnection() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    let other = try MemoryStore(url: url)
+    let memory = try await other.remember("cats")
+
+    let gate = Gate()
+    let store = try MemoryStore(url: url, embedder: GatedEmbedder(gates: ["cats": gate]))
+    let reembedding = Task { try await store.reembed() }
+    await gate.arrival()
+    try await other.forget(memory.id)
+    gate.open()
+    #expect(try await reembedding.value == 0)
+    #expect(try await store.count() == 0)
+  }
+
   @Test func concurrentReembedCallsShareOneTask() async throws {
     let embedder = TestEmbedder(identifier: "second")
     let directory = try TemporaryDirectory()

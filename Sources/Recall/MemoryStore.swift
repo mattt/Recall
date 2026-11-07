@@ -271,7 +271,7 @@ public actor MemoryStore {
     while true {
       let statement = try database.prepare(
         """
-        SELECT m.rowid, m.text FROM memories m
+        SELECT m.rowid, m.id, m.text FROM memories m
         LEFT JOIN embeddings e ON e.memory_rowid = m.rowid
         WHERE (e.memory_rowid IS NULL OR e.embedder IS NOT ?) AND m.rowid > ?
         ORDER BY m.rowid
@@ -279,23 +279,46 @@ public actor MemoryStore {
         """
       )
       try statement.bind(.text(embedder.identifier), .integer(lastRowid), .integer(batchSize))
-      var batch: [(rowid: Int, text: String)] = []
+      var batch: [StaleRow] = []
       while try statement.step() {
-        batch.append((statement.int(at: 0), statement.text(at: 1) ?? ""))
+        batch.append(
+          StaleRow(
+            rowid: statement.int(at: 0),
+            id: statement.text(at: 1) ?? "",
+            text: statement.text(at: 2) ?? ""
+          )
+        )
       }
       guard !batch.isEmpty else { return embedded }
       for row in batch {
         lastRowid = row.rowid
         let vector = try await normalizedEmbedding(for: row.text, with: embedder)
-        // The text can change while the embedder runs.
-        // Save the vector only if it still describes the memory.
-        let current = try database.prepare("SELECT text FROM memories WHERE rowid = ?")
-        try current.bind(.integer(row.rowid))
-        guard try current.step(), current.text(at: 0) == row.text else { continue }
-        try saveEmbedding(vector, rowid: row.rowid)
-        embedded += 1
+        // Another task or connection can change or delete the memory while the embedder runs.
+        // Check it and save the vector in one write transaction,
+        // so that no other write can come between them.
+        let saved = try database.transaction { () throws(MemoryStoreError) -> Bool in
+          guard try isCurrent(row) else { return false }
+          try saveEmbedding(vector, rowid: row.rowid)
+          return true
+        }
+        if saved { embedded += 1 }
       }
     }
+  }
+
+  /// A memory that needs a vector from the current embedder.
+  private struct StaleRow {
+    var rowid: Int
+    var id: String
+    var text: String
+  }
+
+  /// Returns whether the row still holds the memory with this identifier and text.
+  private func isCurrent(_ row: StaleRow) throws(MemoryStoreError) -> Bool {
+    let statement = try database.prepare("SELECT id, text FROM memories WHERE rowid = ?")
+    try statement.bind(.integer(row.rowid))
+    guard try statement.step() else { return false }
+    return statement.text(at: 0) == row.id && statement.text(at: 1) == row.text
   }
 
   /// Returns the identifiers of the memories whose vectors are most similar to the vector of `query`,
