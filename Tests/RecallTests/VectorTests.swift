@@ -125,11 +125,57 @@ import Testing
     #expect(embedder.calls.all == ["dogs"])
   }
 
-  @Test func forgettingDeletesVector() async throws {
-    let store = try MemoryStore.inMemory(embedder: TestEmbedder(vectors: Self.vectors))
+  @Test func forgettingDeletesVectorsFromEveryEmbedder() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    let store = try MemoryStore(url: url, embedder: TestEmbedder(vectors: Self.vectors))
+    let other = try MemoryStore(url: url, embedder: TestEmbedder(identifier: "other"))
     let memory = try await store.remember("cats")
+    let kept = try await store.remember("dogs")
+    try await other.reembed()
+    #expect(try await store.embeddingRowCount() == 4)
+
     try await store.forget(memory.id)
-    #expect(try await store.vectorSearch("feline", limit: 10).isEmpty)
+    // Look at the table itself; a search would also miss a vector without a memory.
+    #expect(try await store.embeddingRowCount() == 2)
+    #expect(try await store.embeddingRowCount(for: memory.id) == 0)
+    #expect(try await store.embeddingRowCount(for: kept.id) == 2)
+  }
+
+  @Test func failedVectorSaveRollsBackTextUpdate() async throws {
+    let embedder = TestEmbedder(vectors: ["cats": [1, 0], "dogs": [0, 1], "long": [1, 0, 0]])
+    let store = try MemoryStore.inMemory(embedder: embedder)
+    try await store.remember("cats")
+    let memory = try await store.remember("dogs")
+
+    // The update changes the text and deletes the old vector,
+    // then fails to save a vector of the wrong dimension.
+    await #expect(
+      throws: MemoryStoreError.dimensionMismatch(embedder: "test-v1", expected: 2, actual: 3)
+    ) {
+      try await store.update(memory.id, text: "long")
+    }
+    #expect(try await store.memory(memory.id) == memory)
+    #expect(try await store.keywordSearch("long", limit: 10).isEmpty)
+    #expect(try await store.keywordSearch("dogs", limit: 10) == [memory.id])
+    #expect(try await store.embeddingRowCount(for: memory.id) == 1)
+    #expect(try await store.staleEmbeddingCount() == 0)
+  }
+}
+
+extension MemoryStore {
+  /// The number of rows in the embeddings table,
+  /// for all memories or for one.
+  func embeddingRowCount(for id: UUID? = nil) throws -> Int {
+    let statement = try database.prepare(
+      """
+      SELECT count(*) FROM embeddings e
+      WHERE ?1 IS NULL OR e.memory_rowid = (SELECT rowid FROM memories WHERE id = ?1)
+      """
+    )
+    try statement.bind(.optionalText(id?.uuidString))
+    try statement.step()
+    return statement.int(at: 0)
   }
 }
 
@@ -225,21 +271,52 @@ import Testing
   }
 
   @Test func concurrentReembedCallsShareOneTask() async throws {
-    let embedder = TestEmbedder(identifier: "second")
     let directory = try TemporaryDirectory()
     let url = directory.url.appending(path: "memories.sqlite")
     let plain = try MemoryStore(url: url)
     for index in 0..<20 {
       try await plain.remember("memory number \(index)")
     }
+    // The first memory's embedding waits at the gate,
+    // so every call starts while the shared work is still running.
+    let gate = Gate()
+    let embedder = GatedEmbedder(gates: ["memory number 0": gate])
     let store = try MemoryStore(url: url, embedder: embedder)
-    let counts = try await withThrowingTaskGroup(of: Int.self) { group in
-      for _ in 0..<4 {
-        group.addTask { try await store.reembed() }
-      }
-      return try await group.reduce(into: []) { $0.append($1) }
+    let calls = (0..<4).map { _ in Task { try await store.reembed() } }
+    await gate.arrival()
+    try await waitUntil { await store.reembedWaiterCount == 4 }
+    gate.open()
+
+    var counts: [Int] = []
+    for call in calls {
+      counts.append(try await call.value)
     }
-    #expect(embedder.calls.count == 20)
-    #expect(counts.contains(20))
+    #expect(counts == [20, 20, 20, 20])
+    #expect(embedder.base.calls.count == 20)
+  }
+
+  @Test func partialReembeddingKeepsSavedVectors() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    let plain = try MemoryStore(url: url)
+    for text in ["one", "two", "three"] {
+      try await plain.remember(text)
+    }
+
+    // Memories are embedded in the order they were saved,
+    // so "one" is saved before "two" fails, and "three" isn't reached.
+    let failing = SelectivelyFailingEmbedder(base: TestEmbedder(), failing: ["two"])
+    let store = try MemoryStore(url: url, embedder: failing)
+    await #expect(throws: FailingEmbedder.Failure.self) {
+      try await store.reembed()
+    }
+    #expect(try await store.staleEmbeddingCount() == 2)
+    #expect(failing.base.calls.all == ["one"])
+
+    // A later call with a working embedder embeds only what is still stale.
+    let embedder = TestEmbedder()
+    let retry = try MemoryStore(url: url, embedder: embedder)
+    #expect(try await retry.reembed() == 2)
+    #expect(embedder.calls.all == ["two", "three"])
   }
 }

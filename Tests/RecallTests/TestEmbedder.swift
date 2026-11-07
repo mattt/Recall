@@ -46,6 +46,19 @@ struct FailingEmbedder: Embedder {
   func embed(_ text: String) async throws -> [Float] { throw Failure() }
 }
 
+/// An embedder that fails for chosen texts and embeds the others.
+struct SelectivelyFailingEmbedder: Embedder {
+  let base: TestEmbedder
+  let failing: Set<String>
+
+  var identifier: String { base.identifier }
+
+  func embed(_ text: String) async throws -> [Float] {
+    if failing.contains(text) { throw FailingEmbedder.Failure() }
+    return try await base.embed(text)
+  }
+}
+
 /// Records the texts that an embedder receives.
 final class CallCounter: @unchecked Sendable {
   private let lock = NSLock()

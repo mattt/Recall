@@ -89,6 +89,44 @@ import Testing
     #expect(try await other.staleEmbeddingCount() == 1)
   }
 
+  @Test func failedMigrationRollsBackSchemaAndVersion() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    let database = try Database(url: url)
+    try Schema.migrate(database)
+    let schemaBefore = try Self.schema(of: database)
+
+    // The next migration changes the schema, then fails.
+    let failing = """
+      CREATE TABLE added (value TEXT);
+      ALTER TABLE memories ADD COLUMN extra TEXT;
+      INSERT INTO missing_table VALUES (1);
+      """
+    #expect(throws: MemoryStoreError.self) {
+      try Schema.migrate(
+        database,
+        to: Schema.currentVersion + 1,
+        migrations: Schema.migrations + [failing]
+      )
+    }
+    #expect(try database.userVersion == Schema.currentVersion)
+    #expect(try Self.schema(of: database) == schemaBefore)
+
+    // The store still opens the file.
+    #expect(try await MemoryStore(url: url).count() == 0)
+  }
+
+  /// Returns the SQL of every table, index, and trigger, by name.
+  static func schema(of database: Database) throws -> [String: String] {
+    let statement = try database.prepare(
+      "SELECT name, sql FROM sqlite_schema WHERE sql IS NOT NULL")
+    var schema: [String: String] = [:]
+    while try statement.step() {
+      schema[statement.text(at: 0) ?? ""] = statement.text(at: 1)
+    }
+    return schema
+  }
+
   @Test func refusesNewerSchema() async throws {
     let directory = try TemporaryDirectory()
     let url = directory.url.appending(path: "memories.sqlite")

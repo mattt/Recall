@@ -88,14 +88,17 @@ enum Schema {
   ///
   /// The migration runs in one write transaction,
   /// so two connections that open the same file at the same time
-  /// don't both apply it.
+  /// don't both apply it,
+  /// and a migration that fails leaves the schema and its version unchanged.
+  /// Tests can supply other `migrations`.
   static func migrate(
     _ database: Database,
-    to version: Int = currentVersion
+    to version: Int = currentVersion,
+    migrations: [String] = migrations
   ) throws(MemoryStoreError) {
     try database.transaction { () throws(MemoryStoreError) in
       let existing = try database.userVersion
-      guard existing <= currentVersion else {
+      guard existing <= migrations.count else {
         throw .unsupportedSchemaVersion(existing)
       }
       guard existing < version else { return }

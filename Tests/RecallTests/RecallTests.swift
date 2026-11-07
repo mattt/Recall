@@ -151,22 +151,37 @@ import Testing
     #expect(results.map(\.id) == [match.id])
   }
 
-  @Test func equalScoresPutNewerFirst() async throws {
-    let store = try MemoryStore.inMemory()
-    let older = try await store.remember("tea", createdAt: Date(timeIntervalSinceReferenceDate: 0))
-    let newer = try await store.remember("tea", createdAt: Date(timeIntervalSinceReferenceDate: 1))
+  @Test(arguments: [false, true])
+  func equalScoresPutNewerFirst(keywordLeaderIsNewer: Bool) async throws {
+    // One memory leads the keyword list and the other leads the vector list,
+    // so with equal weights each scores 1/61 + 1/62.
+    let keywordLeader = "tea tea tea"
+    let vectorLeader = "tea and a long sentence about other things"
+    let embedder = TestEmbedder(
+      vectors: ["tea": [1, 0], keywordLeader: [0.6, 0.8], vectorLeader: [0.8, 0.6]]
+    )
+    let store = try MemoryStore.inMemory(embedder: embedder)
+    let first = try await store.remember(
+      keywordLeader,
+      createdAt: Date(timeIntervalSinceReferenceDate: keywordLeaderIsNewer ? 1 : 0)
+    )
+    let second = try await store.remember(
+      vectorLeader,
+      createdAt: Date(timeIntervalSinceReferenceDate: keywordLeaderIsNewer ? 0 : 1)
+    )
     let results = try await store.recall(
-      "tea",
-      configuration: RecallConfiguration(keywordWeight: 0, recencyWeight: 0)
-    )
-    #expect(results.isEmpty)
-    let tied = try await store.recall(
-      "tea",
-      configuration: RecallConfiguration(recencyWeight: 0)
-    )
-    // Identical text has identical BM25 scores,
-    // and the keyword query orders ties newest first.
-    #expect(tied.map(\.id) == [newer.id, older.id])
+      "tea", configuration: RecallConfiguration(recencyWeight: 0))
+    try #require(results.count == 2)
+    let byID = Dictionary(uniqueKeysWithValues: results.map { ($0.id, $0) })
+    #expect(byID[first.id]?.keywordRank == 1)
+    #expect(byID[first.id]?.vectorRank == 2)
+    #expect(byID[second.id]?.keywordRank == 2)
+    #expect(byID[second.id]?.vectorRank == 1)
+    #expect(results[0].score == results[1].score)
+    #expect(results[0].score == 1.0 / 61 + 1.0 / 62)
+
+    let newer = keywordLeaderIsNewer ? first : second
+    #expect(results[0].id == newer.id)
   }
 
   @Test func rankingsDescribeTheReturnedText() async throws {
