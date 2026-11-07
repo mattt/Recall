@@ -18,8 +18,8 @@ struct TestEmbedder: Embedder {
     self.vectors = vectors
   }
 
-  func embed(_ text: String) async throws -> [Float] {
-    calls.increment(text)
+  func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float] {
+    calls.record(text, purpose)
     if let vector = vectors[text] { return vector }
     var vector = [Float](repeating: 0, count: dimension)
     for word in text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
@@ -43,7 +43,9 @@ struct TestEmbedder: Embedder {
 struct FailingEmbedder: Embedder {
   struct Failure: Error {}
   let identifier = "failing"
-  func embed(_ text: String) async throws -> [Float] { throw Failure() }
+  func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float] {
+    throw Failure()
+  }
 }
 
 /// An embedder that fails for chosen texts and embeds the others.
@@ -53,23 +55,34 @@ struct SelectivelyFailingEmbedder: Embedder {
 
   var identifier: String { base.identifier }
 
-  func embed(_ text: String) async throws -> [Float] {
+  func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float] {
     if failing.contains(text) { throw FailingEmbedder.Failure() }
-    return try await base.embed(text)
+    return try await base.embed(text, for: purpose)
   }
 }
 
-/// Records the texts that an embedder receives.
+/// Records the texts that an embedder receives, with their purposes.
 final class CallCounter: @unchecked Sendable {
-  private let lock = NSLock()
-  private var texts: [String] = []
-
-  func increment(_ text: String) {
-    lock.withLock { texts.append(text) }
+  struct Call: Hashable {
+    var text: String
+    var purpose: EmbeddingPurpose
   }
 
-  var count: Int { lock.withLock { texts.count } }
-  var all: [String] { lock.withLock { texts } }
+  private let lock = NSLock()
+  private var calls: [Call] = []
+
+  func record(_ text: String, _ purpose: EmbeddingPurpose) {
+    lock.withLock { calls.append(Call(text: text, purpose: purpose)) }
+  }
+
+  var count: Int { lock.withLock { calls.count } }
+  var all: [String] { lock.withLock { calls.map(\.text) } }
+  var withPurposes: [Call] { lock.withLock { calls } }
+
+  /// Removes the recorded calls.
+  func reset() {
+    lock.withLock { calls = [] }
+  }
 }
 
 /// An embedder that pauses on chosen texts until a test opens their gates.
@@ -84,9 +97,9 @@ struct GatedEmbedder: Embedder {
 
   var identifier: String { base.identifier }
 
-  func embed(_ text: String) async throws -> [Float] {
+  func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float] {
     await gates[text]?.pass()
-    return try await base.embed(text)
+    return try await base.embed(text, for: purpose)
   }
 }
 

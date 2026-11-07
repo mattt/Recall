@@ -320,3 +320,59 @@ extension MemoryStore {
     #expect(embedder.calls.all == ["two", "three"])
   }
 }
+
+@Suite struct EmbeddingPurposeTests {
+  typealias Call = CallCounter.Call
+
+  @Test func writesEmbedDocuments() async throws {
+    let embedder = TestEmbedder()
+    let store = try MemoryStore.inMemory(embedder: embedder)
+    var memory = try await store.remember("first text")
+    memory.text = "second text"
+    memory = try await store.update(memory)
+    try await store.update(memory.id, text: "third text")
+    #expect(
+      embedder.calls.withPurposes == [
+        Call(text: "first text", purpose: .document),
+        Call(text: "second text", purpose: .document),
+        Call(text: "third text", purpose: .document),
+      ]
+    )
+  }
+
+  @Test func reembeddingEmbedsDocuments() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    try await MemoryStore(url: url).remember("saved text")
+    let embedder = TestEmbedder()
+    let store = try MemoryStore(url: url, embedder: embedder)
+    #expect(try await store.reembed() == 1)
+    #expect(embedder.calls.withPurposes == [Call(text: "saved text", purpose: .document)])
+  }
+
+  @Test func recallEmbedsStaleMemoriesAsDocumentsAndTheQueryAsAQuery() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    try await MemoryStore(url: url).remember("saved text")
+    let embedder = TestEmbedder()
+    let store = try MemoryStore(url: url, embedder: embedder)
+    _ = try await store.recall("text")
+    #expect(
+      embedder.calls.withPurposes == [
+        Call(text: "saved text", purpose: .document),
+        Call(text: "text", purpose: .query),
+      ]
+    )
+
+    // Nothing is stale now, so only the query is embedded.
+    embedder.calls.reset()
+    _ = try await store.recall("saved")
+    _ = try await store.vectorSearch("other", limit: 10)
+    #expect(
+      embedder.calls.withPurposes == [
+        Call(text: "saved", purpose: .query),
+        Call(text: "other", purpose: .query),
+      ]
+    )
+  }
+}

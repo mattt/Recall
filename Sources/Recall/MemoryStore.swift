@@ -409,7 +409,7 @@ public actor MemoryStore {
     try await reembed()
     // A query vector that can't be normalized, such as the vector of punctuation,
     // matches nothing; it isn't an error.
-    return Vector.normalized(try await embedder.embed(query))
+    return Vector.normalized(try await embedder.embed(query, for: .query))
   }
 
   /// Returns the identifiers of the memories whose vectors are most similar to a unit vector,
@@ -463,18 +463,19 @@ public actor MemoryStore {
     return Array(scored.prefix(limit))
   }
 
-  /// Returns the unit vector for `text` from the store's embedder,
+  /// Returns the unit vector of a memory's text from the store's embedder,
   /// or `nil` if the store has no embedder.
   private func embedding(for text: String) async throws -> [Float]? {
     guard let embedder else { return nil }
     return try await normalizedEmbedding(for: text, with: embedder)
   }
 
+  /// Returns the unit vector of a memory's text, which the store saves.
   private func normalizedEmbedding(
     for text: String,
     with embedder: any Embedder
   ) async throws -> [Float] {
-    guard let vector = Vector.normalized(try await embedder.embed(text)) else {
+    guard let vector = Vector.normalized(try await embedder.embed(text, for: .document)) else {
       throw MemoryStoreError.invalidEmbedding(embedder: embedder.identifier)
     }
     return vector

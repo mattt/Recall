@@ -109,21 +109,33 @@ The system downloads the model's assets on demand;
 call `prepare()` to download and load the model before the first recall.
 
 To use another model,
-conform a type to `Embedder`:
+conform a type to `Embedder`.
+The store passes a purpose with each text:
+`.document` for the text of a memory that it saves,
+and `.query` for the text of a recall.
+Many retrieval models, such as e5, Nomic, and Qwen3-Embedding,
+expect a different prefix for each purpose;
+`ContextualEmbedder` ignores the purpose.
 
 ```swift
 struct ServiceEmbedder: Embedder {
     let identifier = "example-embedding-model-v1"
     let client: EmbeddingClient
 
-    func embed(_ text: String) async throws -> [Float] {
-        try await client.embedding(for: text)
+    func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float] {
+        let prefix = switch purpose {
+        case .query: "query: "
+        case .document: "passage: "
+        }
+        return try await client.embedding(for: prefix + text)
     }
 }
 ```
 
-The identifier must change whenever the vectors would change,
-for example when you change the model or its version.
+The identifier must change whenever the vectors of memories would change,
+for example when you change the model, its version, or the prefix for documents.
+The store never saves the vector of a query,
+so a change that affects only queries doesn't need a new identifier.
 The store saves each vector with the embedder's identifier and dimension.
 When you open a store with an embedder that has a different identifier,
 the store embeds each memory that has no vector from that embedder

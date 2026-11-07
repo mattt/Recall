@@ -135,7 +135,12 @@
       isLoaded = false
     }
 
-    public func embed(_ text: String) async throws -> [Float] {
+    /// Returns the mean of the model's token vectors for `text`.
+    ///
+    /// The NaturalLanguage model has no separate form for queries and documents,
+    /// so this embedder ignores `purpose`
+    /// and returns the same vector for both.
+    public func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float] {
       try await prepare()
       let result = try embedding.embeddingResult(for: text, language: language)
       var sum = [Double](repeating: 0, count: dimension)
