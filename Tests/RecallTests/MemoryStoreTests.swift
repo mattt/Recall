@@ -133,3 +133,46 @@ final class TemporaryDirectory: Sendable {
     }
   }
 }
+
+@Suite struct NULCharacterTests {
+  @Test func textSourceAndMetadataKeepNULCharacters() async throws {
+    let store = try MemoryStore.inMemory()
+    let saved = try await store.remember(
+      "before\0after",
+      source: "client\0name",
+      metadata: ["key\0one": "value\0one"]
+    )
+    let loaded = try #require(try await store.memory(saved.id))
+    #expect(loaded.text == "before\0after")
+    #expect(loaded.source == "client\0name")
+    #expect(loaded.metadata == ["key\0one": "value\0one"])
+    #expect(loaded == saved)
+
+    // The keyword index sees the text after the NUL character.
+    #expect(try await store.keywordSearch("after", limit: 10) == [saved.id])
+    // A source filter compares the whole string.
+    #expect(try await store.list(source: "client\0name").map(\.id) == [saved.id])
+    #expect(try await store.list(source: "client").isEmpty)
+  }
+
+  @Test func embedderIdentifiersKeepNULCharacters() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    do {
+      let store = try MemoryStore(url: url, embedder: TestEmbedder(identifier: "test\0one"))
+      try await store.remember("cats")
+      #expect(try await store.staleEmbeddingCount() == 0)
+    }
+    // An identifier that differs only after a NUL character is a different embedder.
+    let store = try MemoryStore(url: url, embedder: TestEmbedder(identifier: "test\0two"))
+    #expect(try await store.staleEmbeddingCount() == 1)
+  }
+
+  @Test func emptyStringsStayEmpty() async throws {
+    let store = try MemoryStore.inMemory()
+    let saved = try await store.remember("text", source: "", metadata: ["": ""])
+    let loaded = try #require(try await store.memory(saved.id))
+    #expect(loaded.source == "")
+    #expect(loaded.metadata == ["": ""])
+  }
+}

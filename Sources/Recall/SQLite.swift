@@ -147,7 +147,7 @@ final class Statement {
       case .real(let real):
         code = sqlite3_bind_double(handle, index, real)
       case .text(let text):
-        code = sqlite3_bind_text(handle, index, text, -1, transient)
+        code = Self.bind(text, to: handle, at: index)
       case .blob(let data):
         code = data.withUnsafeBytes { buffer in
           sqlite3_bind_blob(handle, index, buffer.baseAddress, Int32(buffer.count), transient)
@@ -158,6 +158,22 @@ final class Statement {
       }
     }
     return self
+  }
+
+  /// Binds the UTF-8 bytes of `text` with an explicit length,
+  /// so that a NUL character doesn't end the value early.
+  private static func bind(_ text: String, to handle: OpaquePointer, at index: Int32) -> Int32 {
+    var text = text
+    return text.withUTF8 { buffer in
+      // A null pointer binds SQL NULL, so an empty string needs a real pointer.
+      guard let base = buffer.baseAddress, !buffer.isEmpty else {
+        return sqlite3_bind_text64(handle, index, "", 0, transient, UInt8(SQLITE_UTF8))
+      }
+      return base.withMemoryRebound(to: CChar.self, capacity: buffer.count) { pointer in
+        sqlite3_bind_text64(
+          handle, index, pointer, sqlite3_uint64(buffer.count), transient, UInt8(SQLITE_UTF8))
+      }
+    }
   }
 
   /// Advances to the next row.
@@ -188,9 +204,16 @@ final class Statement {
     sqlite3_column_double(handle, column)
   }
 
+  /// Returns the text in a column, or `nil` if the value is NULL.
+  ///
+  /// The length comes from SQLite,
+  /// so a NUL character in the value is kept.
   func text(at column: Int32) -> String? {
+    // `sqlite3_column_bytes` must follow `sqlite3_column_text`,
+    // so that it counts the bytes of the converted text.
     guard let pointer = sqlite3_column_text(handle, column) else { return nil }
-    return String(cString: pointer)
+    let count = Int(sqlite3_column_bytes(handle, column))
+    return String(decoding: UnsafeBufferPointer(start: pointer, count: count), as: UTF8.self)
   }
 
   func data(at column: Int32) -> Data {
