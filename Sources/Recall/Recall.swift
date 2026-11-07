@@ -41,6 +41,8 @@ public struct RecallConfiguration: Hashable, Sendable {
 
   /// The cosine similarity that a memory needs to be in the vector list,
   /// or `nil` to allow every memory with a vector.
+  ///
+  /// A value must be finite and in the range `-1...1`.
   public var minimumSimilarity: Float?
 
   /// Creates a configuration.
@@ -67,16 +69,49 @@ public struct RecallConfiguration: Hashable, Sendable {
 
   /// Throws if a value can't produce meaningful scores.
   func validate() throws(MemoryStoreError) {
-    guard k.isFinite, k >= 0 else {
-      throw .invalidConfiguration("k must be a finite number that isn't negative.")
+    guard k.isFinite, k >= 0 else { throw .invalidConfiguration(.k) }
+    let weights = [keywordWeight, vectorWeight, recencyWeight]
+    for weight in weights {
+      guard weight.isFinite, weight >= 0 else { throw .invalidConfiguration(.weight) }
     }
-    for weight in [keywordWeight, vectorWeight, recencyWeight] {
-      guard weight.isFinite, weight >= 0 else {
-        throw .invalidConfiguration("Each weight must be a finite number that isn't negative.")
+    // The highest possible score puts a memory at rank 1 in every list.
+    // Floating-point addition and division are monotonic,
+    // so if this sum is finite, every fused score is finite.
+    let highestScore = weights.reduce(0) { $0 + $1 / (k + 1) }
+    guard highestScore.isFinite else { throw .invalidConfiguration(.scoreOverflow) }
+    guard candidateLimit > 0 else { throw .invalidConfiguration(.candidateLimit) }
+    if let minimumSimilarity {
+      guard minimumSimilarity.isFinite, (-1...1).contains(minimumSimilarity) else {
+        throw .invalidConfiguration(.minimumSimilarity)
       }
     }
-    guard candidateLimit > 0 else {
-      throw .invalidConfiguration("candidateLimit must be greater than zero.")
+  }
+
+  /// A reason that a configuration isn't valid.
+  public enum Problem: Hashable, Sendable, CustomStringConvertible {
+    /// `k` isn't finite, or it is negative.
+    case k
+
+    /// A weight isn't finite, or it is negative.
+    case weight
+
+    /// The weights are so large that a fused score would overflow to infinity.
+    case scoreOverflow
+
+    /// `candidateLimit` isn't greater than zero.
+    case candidateLimit
+
+    /// `minimumSimilarity` isn't finite, or it is outside the range `-1...1`.
+    case minimumSimilarity
+
+    public var description: String {
+      switch self {
+      case .k: "k must be a finite number that isn't negative."
+      case .weight: "Each weight must be a finite number that isn't negative."
+      case .scoreOverflow: "The weights are too large: a fused score would be infinite."
+      case .candidateLimit: "candidateLimit must be greater than zero."
+      case .minimumSimilarity: "minimumSimilarity must be a finite number from -1 to 1."
+      }
     }
   }
 }

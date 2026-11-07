@@ -208,17 +208,53 @@ import Testing
     #expect(try await store.recall("\"*)").isEmpty)
   }
 
-  @Test(arguments: [
-    RecallConfiguration(k: -1),
-    RecallConfiguration(k: .infinity),
-    RecallConfiguration(keywordWeight: -1),
-    RecallConfiguration(vectorWeight: .nan),
-    RecallConfiguration(candidateLimit: 0),
-  ])
-  func rejectsInvalidConfiguration(_ configuration: RecallConfiguration) async throws {
+  @Test(
+    arguments: [
+      (RecallConfiguration(k: -1), .k),
+      (RecallConfiguration(k: .infinity), .k),
+      (RecallConfiguration(k: .nan), .k),
+      (RecallConfiguration(keywordWeight: -1), .weight),
+      (RecallConfiguration(vectorWeight: .nan), .weight),
+      (RecallConfiguration(recencyWeight: .infinity), .weight),
+      (RecallConfiguration(candidateLimit: 0), .candidateLimit),
+      (RecallConfiguration(minimumSimilarity: .nan), .minimumSimilarity),
+      (RecallConfiguration(minimumSimilarity: .infinity), .minimumSimilarity),
+      (RecallConfiguration(minimumSimilarity: 1.5), .minimumSimilarity),
+      (RecallConfiguration(minimumSimilarity: -1.01), .minimumSimilarity),
+      (
+        RecallConfiguration(
+          k: 0, keywordWeight: .greatestFiniteMagnitude, vectorWeight: .greatestFiniteMagnitude),
+        .scoreOverflow
+      ),
+      (
+        RecallConfiguration(
+          k: 1, keywordWeight: .greatestFiniteMagnitude, vectorWeight: .greatestFiniteMagnitude,
+          recencyWeight: .greatestFiniteMagnitude),
+        .scoreOverflow
+      ),
+    ] as [(RecallConfiguration, RecallConfiguration.Problem)])
+  func rejectsInvalidConfiguration(
+    _ configuration: RecallConfiguration,
+    problem: RecallConfiguration.Problem
+  ) async throws {
     let store = try MemoryStore.inMemory()
-    await #expect(throws: MemoryStoreError.self) {
+    await #expect(throws: MemoryStoreError.invalidConfiguration(problem)) {
       try await store.recall("tea", configuration: configuration)
     }
+  }
+
+  @Test(arguments: [
+    RecallConfiguration(minimumSimilarity: -1),
+    RecallConfiguration(minimumSimilarity: 1),
+    RecallConfiguration(k: 0, keywordWeight: .greatestFiniteMagnitude, vectorWeight: 0),
+    RecallConfiguration(
+      k: 1, keywordWeight: .greatestFiniteMagnitude, vectorWeight: .greatestFiniteMagnitude,
+      recencyWeight: 0),
+  ])
+  func acceptsBoundaryConfiguration(_ configuration: RecallConfiguration) async throws {
+    let store = try MemoryStore.inMemory(embedder: TestEmbedder())
+    try await store.remember("tea")
+    let results = try await store.recall("tea", configuration: configuration)
+    #expect(results.allSatisfy { $0.score.isFinite })
   }
 }

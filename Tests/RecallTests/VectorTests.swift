@@ -80,10 +80,30 @@ import Testing
     let embedder = TestEmbedder(vectors: ["short": [1, 0], "long": [1, 0, 0]])
     let store = try MemoryStore.inMemory(embedder: embedder)
     try await store.remember("short")
-    await #expect(throws: MemoryStoreError.invalidEmbedding(embedder: "test-v1")) {
+    await #expect(
+      throws: MemoryStoreError.dimensionMismatch(embedder: "test-v1", expected: 2, actual: 3)
+    ) {
       try await store.remember("long")
     }
     #expect(try await store.count() == 1)
+  }
+
+  @Test func rejectsQueryVectorOfAnotherDimension() async throws {
+    let embedder = TestEmbedder(vectors: ["cats": [1, 0], "query": [1, 0, 0]])
+    let store = try MemoryStore.inMemory(embedder: embedder)
+    try await store.remember("cats")
+    let error = MemoryStoreError.dimensionMismatch(embedder: "test-v1", expected: 2, actual: 3)
+    await #expect(throws: error) {
+      try await store.vectorSearch("query", limit: 10)
+    }
+    await #expect(throws: error) {
+      try await store.recall("query")
+    }
+  }
+
+  @Test func queryVectorOfAnyDimensionFindsNothingInEmptyStore() async throws {
+    let store = try MemoryStore.inMemory(embedder: TestEmbedder(vectors: ["query": [1, 0, 0]]))
+    #expect(try await store.vectorSearch("query", limit: 10).isEmpty)
   }
 
   @Test func updatingTextReplacesVector() async throws {

@@ -429,6 +429,19 @@ public actor MemoryStore {
     embedder: String,
     limit: Int
   ) throws(MemoryStoreError) -> [(id: UUID, similarity: Float)] {
+    // A query vector can't be compared with vectors of another dimension.
+    // The store keeps one dimension for each embedder,
+    // so a different dimension means that the embedder broke its contract.
+    let dimensions = try database.prepare(
+      "SELECT DISTINCT dimension FROM embeddings WHERE embedder = ?"
+    )
+    try dimensions.bind(.text(embedder))
+    while try dimensions.step() {
+      let dimension = dimensions.int(at: 0)
+      guard dimension == query.count else {
+        throw .dimensionMismatch(embedder: embedder, expected: dimension, actual: query.count)
+      }
+    }
     let statement = try database.prepare(
       """
       SELECT m.id, e.vector FROM embeddings e
@@ -479,7 +492,8 @@ public actor MemoryStore {
     )
     try existing.bind(.text(identifier), .integer(rowid))
     if try existing.step(), existing.int(at: 0) != vector.count {
-      throw .invalidEmbedding(embedder: identifier)
+      throw .dimensionMismatch(
+        embedder: identifier, expected: existing.int(at: 0), actual: vector.count)
     }
     try database.prepare(
       """
