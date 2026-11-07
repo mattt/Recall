@@ -27,12 +27,15 @@ final class Database {
     guard let handle else {
       throw .sqlite(code: code, message: "Cannot open the database at \(path).")
     }
-    self.handle = handle
+    // Assign the stored property only after the open succeeds.
+    // An initializer that throws after it initializes every stored property
+    // runs `deinit`, which would close the handle a second time.
     guard code == SQLITE_OK else {
       let message = String(cString: sqlite3_errmsg(handle))
       sqlite3_close_v2(handle)
       throw .sqlite(code: code, message: message)
     }
+    self.handle = handle
     sqlite3_busy_timeout(handle, 5_000)
     sqlite3_extended_result_codes(handle, 1)
   }

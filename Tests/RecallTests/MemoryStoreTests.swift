@@ -119,3 +119,17 @@ final class TemporaryDirectory: Sendable {
     try? FileManager.default.removeItem(at: url)
   }
 }
+
+@Suite struct DatabaseTests {
+  @Test func openFailureThrows() throws {
+    let directory = try TemporaryDirectory()
+    // SQLite can't create a file in a directory that doesn't exist.
+    let url = directory.url.appending(path: "missing/memories.sqlite")
+    #expect {
+      try MemoryStore(url: url)
+    } throws: { error in
+      guard case .sqlite(let code, _) = error as? MemoryStoreError else { return false }
+      return code & 0xFF == 14  // SQLITE_CANTOPEN
+    }
+  }
+}
