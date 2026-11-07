@@ -14,6 +14,14 @@ import Foundation
 /// If you supply an ``Embedder``,
 /// the store also keeps a vector for each memory
 /// and uses it for semantic search.
+///
+/// ## Cancellation
+///
+/// Each asynchronous method checks for cancellation before it starts.
+/// A method that writes checks again after the embedder returns,
+/// before it commits,
+/// so a canceled call throws `CancellationError` and saves nothing.
+/// Re-embedding is the exception that ``reembed()`` describes.
 public actor MemoryStore {
   let database: Database
 
@@ -22,6 +30,12 @@ public actor MemoryStore {
 
   /// The task that is embedding stale memories, if one is running.
   private var reembedding: Task<Int, any Error>?
+
+  /// The number of calls that are waiting for ``reembedding``.
+  private(set) var reembedWaiterCount = 0
+
+  /// Whether a re-embedding task is running.
+  var isReembedding: Bool { reembedding != nil }
 
   /// Opens or creates a store in the SQLite file at `url`.
   ///
@@ -76,6 +90,7 @@ public actor MemoryStore {
   ///     Supply a date to import memories from elsewhere.
   /// - Returns: The saved memory.
   /// - Throws: ``MemoryStoreError/emptyText`` if `text` contains only whitespace,
+  ///   `CancellationError` if the task is canceled before the store saves the memory,
   ///   or any error from the embedder.
   ///   If the embedder fails, the store doesn't save the memory.
   @discardableResult
@@ -85,9 +100,11 @@ public actor MemoryStore {
     metadata: [String: String] = [:],
     createdAt: Date = Date()
   ) async throws -> Memory {
+    try Task.checkCancellation()
     try Self.validate(text)
     let memory = Memory(text: text, createdAt: createdAt, source: source, metadata: metadata)
     let vector = try await embedding(for: text)
+    try Task.checkCancellation()
     try database.transaction { () throws(MemoryStoreError) in
       let rowid = try insert(memory)
       if let vector { try saveEmbedding(vector, rowid: rowid) }
@@ -107,15 +124,18 @@ public actor MemoryStore {
   /// - Parameter memory: The memory with its new values.
   /// - Returns: The saved memory.
   /// - Throws: ``MemoryStoreError/notFound(_:)`` if the store has no memory with that identifier,
+  ///   `CancellationError` if the task is canceled before the store saves the change,
   ///   or any error from the embedder.
   ///   If the embedder fails, the store doesn't save the change.
   @discardableResult
   public func update(_ memory: Memory) async throws -> Memory {
+    try Task.checkCancellation()
     try Self.validate(memory.text)
     guard let existing = try self.memory(memory.id) else {
       throw MemoryStoreError.notFound(memory.id)
     }
     let vector = existing.text == memory.text ? nil : try await embedding(for: memory.text)
+    try Task.checkCancellation()
     try database.transaction { () throws(MemoryStoreError) in
       let rowid = try save(memory)
       if let vector { try saveEmbedding(vector, rowid: rowid) }
@@ -130,14 +150,17 @@ public actor MemoryStore {
   ///
   /// - Returns: The saved memory.
   /// - Throws: ``MemoryStoreError/notFound(_:)`` if the store has no memory with that identifier,
+  ///   `CancellationError` if the task is canceled before the store saves the change,
   ///   or any error from the embedder.
   ///   If the embedder fails, the store doesn't save the change.
   @discardableResult
   public func update(_ id: UUID, text: String) async throws -> Memory {
+    try Task.checkCancellation()
     try Self.validate(text)
     guard let existing = try memory(id) else { throw MemoryStoreError.notFound(id) }
     if existing.text != text {
       let vector = try await embedding(for: text)
+      try Task.checkCancellation()
       try database.transaction { () throws(MemoryStoreError) in
         try database.prepare("UPDATE memories SET text = ? WHERE id = ?")
           .bind(.text(text), .text(id.uuidString))
@@ -242,14 +265,51 @@ public actor MemoryStore {
   ///
   /// If another call is already embedding memories,
   /// this call waits for it and returns the same count.
+  ///
+  /// The work runs in a task that all waiting calls share.
+  /// If the task that calls this method is canceled,
+  /// this call stops waiting and throws `CancellationError`,
+  /// but the shared work continues for the other calls.
+  /// The store saves each vector as soon as the embedder returns it,
+  /// so if the embedder throws,
+  /// the vectors that the work saved before the error remain,
+  /// and a later call embeds only the memories that are still stale.
   @discardableResult
   public func reembed() async throws -> Int {
+    try Task.checkCancellation()
     guard let embedder else { return 0 }
-    if let reembedding { return try await reembedding.value }
-    let task = Task { try await embedStaleMemories(with: embedder) }
-    reembedding = task
-    defer { reembedding = nil }
-    return try await task.value
+    let task: Task<Int, any Error>
+    if let reembedding {
+      task = reembedding
+    } else {
+      // The task clears itself when it ends,
+      // so a waiter that stops waiting doesn't let a second task start.
+      task = Task {
+        defer { reembedding = nil }
+        return try await embedStaleMemories(with: embedder)
+      }
+      reembedding = task
+    }
+    reembedWaiterCount += 1
+    defer { reembedWaiterCount -= 1 }
+    return try await Self.value(of: task)
+  }
+
+  /// Returns the value of `task`,
+  /// or throws `CancellationError` as soon as the current task is canceled.
+  ///
+  /// Unlike `Task.value`, this method stops waiting on cancellation.
+  /// It doesn't cancel `task`.
+  private static func value<T: Sendable>(of task: Task<T, any Error>) async throws -> T {
+    let waiter = Waiter<T>()
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        waiter.wait(continuation)
+        Task { waiter.finish(await task.result) }
+      }
+    } onCancel: {
+      waiter.finish(.failure(CancellationError()))
+    }
   }
 
   /// The number of memories that have no vector from the current embedder.
@@ -512,5 +572,35 @@ public actor MemoryStore {
     try statement.bind(.text(id.uuidString))
     guard try statement.step() else { throw .notFound(id) }
     return statement.int(at: 0)
+  }
+}
+
+/// A continuation that resumes once,
+/// with the first result that it receives.
+private final class Waiter<T: Sendable>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var continuation: CheckedContinuation<T, any Error>?
+  private var result: Result<T, any Error>?
+
+  /// Resumes `continuation` with a result that has arrived,
+  /// or keeps it for ``finish(_:)``.
+  func wait(_ continuation: CheckedContinuation<T, any Error>) {
+    let result = lock.withLock {
+      if result == nil { self.continuation = continuation }
+      return result
+    }
+    if let result { continuation.resume(with: result) }
+  }
+
+  /// Records `result` and resumes the waiting continuation,
+  /// unless an earlier result arrived first.
+  func finish(_ result: Result<T, any Error>) {
+    let continuation = lock.withLock { () -> CheckedContinuation<T, any Error>? in
+      guard self.result == nil else { return nil }
+      self.result = result
+      defer { self.continuation = nil }
+      return self.continuation
+    }
+    continuation?.resume(with: result)
   }
 }

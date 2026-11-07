@@ -178,6 +178,7 @@ extension MemoryStore {
     limit: Int = 10,
     configuration: RecallConfiguration = RecallConfiguration()
   ) async throws -> [RecallResult] {
+    try Task.checkCancellation()
     try configuration.validate()
     guard limit > 0 else { return [] }
 

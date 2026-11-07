@@ -135,3 +135,19 @@ All vectors from one embedder must have the same number of elements.
 
 If an embedder throws while the store saves a memory,
 the store doesn't save the memory.
+
+## Cancellation
+
+Each asynchronous method of `MemoryStore` checks for cancellation before it starts.
+`remember` and `update` check again after the embedder returns
+and before they commit,
+so a canceled call throws `CancellationError` and saves nothing.
+
+Re-embedding is shared work.
+When several calls to `reembed()` or `recall` need it at the same time,
+they wait for one task.
+If one of those calls is canceled,
+it stops waiting and throws `CancellationError`,
+but the work continues for the others.
+The store saves each vector as soon as the embedder returns it,
+so the vectors saved before an embedder error remain.
