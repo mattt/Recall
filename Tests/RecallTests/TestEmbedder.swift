@@ -1,12 +1,41 @@
 import Foundation
 import Recall
 
+/// A test type that makes vectors and records how the store calls it.
+///
+/// The store takes an ``Embedder`` value;
+/// ``embedder`` wraps the type in one,
+/// and the extension on `MemoryStore` below passes it on.
+protocol EmbedderSource: Sendable {
+  var identifier: String { get }
+  func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float]
+}
+
+extension EmbedderSource {
+  /// An embedder that calls this value.
+  var embedder: Embedder {
+    Embedder(identifier: identifier) { text, purpose in
+      try await self.embed(text, for: purpose)
+    }
+  }
+}
+
+extension MemoryStore {
+  init(url: URL, embedder source: some EmbedderSource) throws {
+    try self.init(url: url, embedder: source.embedder)
+  }
+
+  static func inMemory(embedder source: some EmbedderSource) throws -> MemoryStore {
+    try inMemory(embedder: source.embedder)
+  }
+}
+
 /// A deterministic embedder for tests.
 ///
 /// It returns the vector in `vectors` for text that it knows.
 /// For other text, it counts words into buckets by a stable hash,
 /// so texts that share words have similar vectors.
-struct TestEmbedder: Embedder {
+struct TestEmbedder: EmbedderSource {
   let identifier: String
   var dimension = 16
   var vectors: [String: [Float]] = [:]
@@ -40,7 +69,7 @@ struct TestEmbedder: Embedder {
 }
 
 /// An embedder that always fails.
-struct FailingEmbedder: Embedder {
+struct FailingEmbedder: EmbedderSource {
   struct Failure: Error {}
   let identifier = "failing"
   func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float] {
@@ -49,7 +78,7 @@ struct FailingEmbedder: Embedder {
 }
 
 /// An embedder that fails for chosen texts and embeds the others.
-struct SelectivelyFailingEmbedder: Embedder {
+struct SelectivelyFailingEmbedder: EmbedderSource {
   let base: TestEmbedder
   let failing: Set<String>
 
@@ -86,7 +115,7 @@ final class CallCounter: @unchecked Sendable {
 }
 
 /// An embedder that pauses on chosen texts until a test opens their gates.
-struct GatedEmbedder: Embedder {
+struct GatedEmbedder: EmbedderSource {
   let base: TestEmbedder
   let gates: [String: Gate]
 

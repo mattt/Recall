@@ -11,7 +11,18 @@ public enum EmbeddingPurpose: Sendable, Hashable {
   case document
 }
 
-/// A type that turns text into a vector for semantic search.
+/// A model that turns text into a vector for semantic search.
+///
+/// An embedder is a value with an ``identifier``
+/// and a closure that makes vectors,
+/// so any package can provide one without Recall depending on it.
+///
+/// ```swift
+/// let embedder = Embedder(identifier: "example-model-v2") { text, purpose in
+///   try await client.embedding(for: text, purpose: purpose)
+/// }
+/// let store = try MemoryStore(url: url, embedder: embedder)
+/// ```
 ///
 /// A memory store calls ``embed(_:for:)`` with ``EmbeddingPurpose/document``
 /// for each memory that it saves or embeds again,
@@ -32,15 +43,34 @@ public enum EmbeddingPurpose: Sendable, Hashable {
 ///
 /// Every vector from one embedder must have the same number of elements,
 /// for both purposes.
-public protocol Embedder: Sendable {
+public struct Embedder: Sendable {
   /// A string that identifies the model and its version,
   /// such as `"example-model-v2"`.
-  var identifier: String { get }
+  public let identifier: String
+
+  private let body: @Sendable (String, EmbeddingPurpose) async throws -> [Float]
+
+  /// Creates an embedder.
+  ///
+  /// - Parameters:
+  ///   - identifier: A string that identifies the model and its version.
+  ///     Change it whenever the vectors of documents would change.
+  ///   - embed: A closure that returns a vector
+  ///     for a text and the purpose of that text.
+  public init(
+    identifier: String,
+    embed: @escaping @Sendable (String, EmbeddingPurpose) async throws -> [Float]
+  ) {
+    self.identifier = identifier
+    self.body = embed
+  }
 
   /// Returns a vector that represents the meaning of `text`.
   ///
   /// - Parameters:
   ///   - text: The text to embed.
   ///   - purpose: Whether `text` is a query or a document to search.
-  func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float]
+  public func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float] {
+    try await body(text, purpose)
+  }
 }

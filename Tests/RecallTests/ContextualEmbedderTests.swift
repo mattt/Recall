@@ -28,6 +28,14 @@
       #expect(embedder.identifier.contains("/\(embedder.revision)/"))
     }
 
+    @Test func embedderValueMatchesTheActor() async throws {
+      let contextual = try ContextualEmbedder(language: .english)
+      let embedder = contextual.embedder
+      #expect(embedder.identifier == contextual.identifier)
+      let direct = try await contextual.embed("The user prefers tea.", for: .document)
+      #expect(try await embedder.embed("The user prefers tea.", for: .document) == direct)
+    }
+
     @Test func embeddingIsDeterministic() async throws {
       let embedder = try ContextualEmbedder(language: .english)
       let first = try await embedder.embed("Same text twice.", for: .document)
@@ -54,7 +62,8 @@
     }
 
     @Test func storeRecallsWithoutSharedWords() async throws {
-      let store = try MemoryStore.inMemory(embedder: try ContextualEmbedder(language: .english))
+      let store = try MemoryStore.inMemory(
+        embedder: try ContextualEmbedder(language: .english).embedder)
       let drink = try await store.remember("The user prefers tea to coffee.")
       try await store.remember("The car needs new tires before winter.")
       let results = try await store.recall(

@@ -2,7 +2,7 @@ import Foundation
 
 /// An error that a memory store throws.
 ///
-/// Errors from an ``Embedder`` pass through unchanged.
+/// Errors that an ``Embedder`` throws pass through unchanged.
 public enum MemoryStoreError: Error, Hashable, Sendable {
   /// SQLite returned an error.
   ///

@@ -23,8 +23,8 @@ import Recall
 let directory = URL.applicationSupportDirectory
 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 let url = directory.appending(path: "memories.sqlite")
-let embedder = try ContextualEmbedder(language: .english)
-let store = try MemoryStore(url: url, embedder: embedder)
+let contextual = try ContextualEmbedder(language: .english)
+let store = try MemoryStore(url: url, embedder: contextual.embedder)
 
 try await store.remember(
     "The user prefers tea to coffee.",
@@ -130,9 +130,13 @@ so a client can explain why a memory appears where it does.
 It takes the mean of the model's token vectors to get one vector for each text.
 The system downloads the model's assets on demand;
 call `prepare()` to download and load the model before the first recall.
+Its `embedder` property gives the value that a store takes.
 
 To use another model,
-conform a type to `Embedder`.
+create an `Embedder` with an identifier and a closure that returns a vector.
+Because `Embedder` is a struct with a closure,
+another package can provide one
+without Recall depending on that package.
 The store passes a purpose with each text:
 `.document` for the text of a memory that it saves,
 and `.query` for the text of a recall.
@@ -141,19 +145,20 @@ expect a different prefix for each purpose;
 `ContextualEmbedder` ignores the purpose.
 
 ```swift
-struct ServiceEmbedder: Embedder {
-    let identifier = "example-embedding-model-v1"
-    let client: EmbeddingClient
-
-    func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float] {
-        let prefix = switch purpose {
-        case .query: "query: "
-        case .document: "passage: "
-        }
-        return try await client.embedding(for: prefix + text)
+let client = EmbeddingClient()
+let embedder = Embedder(identifier: "example-embedding-model-v1") { text, purpose in
+    let prefix = switch purpose {
+    case .query: "query: "
+    case .document: "passage: "
     }
+    return try await client.embedding(for: prefix + text)
 }
+let store = try MemoryStore(url: url, embedder: embedder)
 ```
+
+The closure must be `Sendable`,
+so the client it uses must be `Sendable` too,
+such as an actor.
 
 The identifier must change whenever the vectors of memories would change,
 for example when you change the model, its version, or the prefix for documents.

@@ -29,7 +29,7 @@ public actor MemoryStore {
   let database: Database
 
   /// The embedder that the store uses for vector search, if any.
-  public nonisolated let embedder: (any Embedder)?
+  public nonisolated let embedder: Embedder?
 
   /// The task that is embedding stale memories, if one is running.
   private var reembedding: Task<Int, any Error>?
@@ -53,7 +53,7 @@ public actor MemoryStore {
   ///   if a newer version of Recall created the file,
   ///   or ``MemoryStoreError/sqlite(code:message:)``
   ///   if SQLite can't open it.
-  public init(url: URL, embedder: (any Embedder)? = nil) throws {
+  public init(url: URL, embedder: Embedder? = nil) throws {
     try self.init(database: Database(url: url), isFile: true, embedder: embedder)
   }
 
@@ -63,14 +63,14 @@ public actor MemoryStore {
   ///
   /// - Parameter embedder: The embedder for vector search,
   ///   or `nil` to use keyword search only.
-  public static func inMemory(embedder: (any Embedder)? = nil) throws -> MemoryStore {
+  public static func inMemory(embedder: Embedder? = nil) throws -> MemoryStore {
     try MemoryStore(database: Database(url: nil), isFile: false, embedder: embedder)
   }
 
   init(
     database: Database,
     isFile: Bool,
-    embedder: (any Embedder)?
+    embedder: Embedder?
   ) throws(MemoryStoreError) {
     self.embedder = embedder
     if isFile {
@@ -334,7 +334,7 @@ public actor MemoryStore {
     return statement.int(at: 0)
   }
 
-  private func embedStaleMemories(with embedder: any Embedder) async throws -> Int {
+  private func embedStaleMemories(with embedder: Embedder) async throws -> Int {
     let batchSize = 64
     var embedded = 0
     // Rows that fail are skipped so that the loop ends;
@@ -479,7 +479,7 @@ public actor MemoryStore {
   /// Returns the unit vector of a memory's text, which the store saves.
   private func normalizedEmbedding(
     for text: String,
-    with embedder: any Embedder
+    with embedder: Embedder
   ) async throws -> [Float] {
     guard let vector = Vector.normalized(try await embedder.embed(text, for: .document)) else {
       throw MemoryStoreError.invalidEmbedding(embedder: embedder.identifier)

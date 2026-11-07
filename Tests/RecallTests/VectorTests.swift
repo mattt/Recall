@@ -321,6 +321,37 @@ extension MemoryStore {
   }
 }
 
+@Suite struct EmbedderValueTests {
+  @Test func embedPassesTextAndPurposeToTheClosure() async throws {
+    let calls = CallCounter()
+    let embedder = Embedder(identifier: "closure-v1") { text, purpose in
+      calls.record(text, purpose)
+      return [Float(text.count)]
+    }
+    #expect(embedder.identifier == "closure-v1")
+    #expect(try await embedder.embed("abc", for: .query) == [3])
+    #expect(try await embedder.embed("abcd", for: .document) == [4])
+    #expect(
+      calls.withPurposes == [
+        CallCounter.Call(text: "abc", purpose: .query),
+        CallCounter.Call(text: "abcd", purpose: .document),
+      ]
+    )
+  }
+
+  @Test func storeUsesTheClosureEmbedder() async throws {
+    let embedder = Embedder(identifier: "closure-v1") { text, _ in
+      text.contains("cat") ? [1, 0] : [0, 1]
+    }
+    let store = try MemoryStore.inMemory(embedder: embedder)
+    let cat = try await store.remember("The cat sleeps.")
+    try await store.remember("The dog barks.")
+    let results = try await store.vectorSearch("cat", limit: 1)
+    #expect(results.map(\.id) == [cat.id])
+    #expect(store.embedder?.identifier == "closure-v1")
+  }
+}
+
 @Suite struct EmbeddingPurposeTests {
   typealias Call = CallCounter.Call
 
