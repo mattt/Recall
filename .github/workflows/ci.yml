@@ -1,0 +1,12 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint
+        run: xcrun swift format lint --strict --recursive .
+      - name: Test
+        run: xcrun swift test
