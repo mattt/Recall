@@ -68,6 +68,10 @@ Recall makes up to three ranked lists for a query:
   so "Running" matches "runs" and "cafe" matches "café".
   Recall quotes each word,
   so FTS5 operators and punctuation in a query can't cause an error.
+  A memory needs only one word of the query to match,
+  so Recall leaves out common English words,
+  such as "the", "my", and "when",
+  unless the query has no other words.
 - **Vector**: memories ordered by the cosine similarity
   between their vectors and the query's vector.
   Recall compares the query with every stored vector,
@@ -76,25 +80,44 @@ Recall makes up to three ranked lists for a query:
 - **Recency**: the memories from the other two lists, newest first.
   This list only reorders memories that the query found;
   it never adds a memory that matches nothing.
+  It has a weight of zero by default, so Recall doesn't make it.
 
 Each list contributes `weight / (k + rank)` to a memory's score,
 where ranks start at 1.
 The score is the sum of these values.
 `RecallConfiguration` sets the constant `k` (default 60)
 and the weight of each list
-(keyword 1, vector 1, and recency 0.5 by default).
-It also limits the number of candidates in each list
-and can set a minimum cosine similarity.
+(keyword 1, vector 1, and recency 0 by default).
+It also limits the number of candidates in each list,
+can set a minimum cosine similarity,
+and can keep the common words in the keyword query.
 
 ```swift
 let results = try await store.recall(
     "tea",
-    configuration: RecallConfiguration(recencyWeight: 0)
+    configuration: RecallConfiguration(recencyWeight: 0.5, ignoresStopWords: false)
 )
 ```
 
 A list with a weight of zero isn't made.
 For example, a vector weight of zero means that recall doesn't call the embedder.
+
+The defaults come from an evaluation with 150 synthetic memories and 61 queries.
+With common words in the keyword query,
+a question such as "Which antibiotic gives me a bad reaction?"
+matched 32 of the 150 memories through "me" and "a",
+and those weak matches pushed the answer,
+fourth in the vector list,
+out of the first ten results.
+Leaving out common words raised nDCG@10 by 0.09 to 0.13
+for keyword-only search, for `ContextualEmbedder`, and for `bge-small-en-v1.5`.
+The recency list gave points to every candidate by its date,
+so a recent memory that matched weakly could move above a good match,
+and removing it raised nDCG@10 by another 0.02 to 0.08.
+No recency setting ranked a newer memory above the one it replaces
+without making other queries worse.
+To replace a memory, update it with `update(_:text:)`
+instead of remembering a second one.
 
 Each `RecallResult` contains the memory, the fused score,
 the memory's rank in each list (or `nil`),

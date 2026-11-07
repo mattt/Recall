@@ -59,7 +59,8 @@ import Testing
     let kitten = try #require(memories["A kitten chased the yarn."])
     let taxes = try #require(memories["Quarterly taxes are due in April."])
 
-    let results = try await store.recall("cat")
+    let results = try await store.recall(
+      "cat", configuration: RecallConfiguration(recencyWeight: 0.5))
     #expect(results.map(\.id) == [cat.id, kitten.id, taxes.id])
 
     // "cat" matches one memory by keyword.
@@ -271,5 +272,42 @@ import Testing
     try await store.remember("tea")
     let results = try await store.recall("tea", configuration: configuration)
     #expect(results.allSatisfy { $0.score.isFinite })
+  }
+
+  @Test func defaultKeywordListIgnoresStopWords() async throws {
+    let store = try MemoryStore.inMemory()
+    let passport = try await store.remember("The passport is in the desk drawer.")
+    try await store.remember("My bike is blue.")
+    try await store.remember("Is it raining where you are?")
+
+    // Without stop words, "where", "is", and "my" would match the other two memories.
+    let results = try await store.recall("Where is my passport?")
+    #expect(results.map(\.id) == [passport.id])
+
+    let everyWord = try await store.recall(
+      "Where is my passport?", configuration: RecallConfiguration(ignoresStopWords: false))
+    #expect(everyWord.count == 3)
+  }
+
+  @Test func queryOfOnlyStopWordsStillMatches() async throws {
+    let store = try MemoryStore.inMemory()
+    let memory = try await store.remember("It is what it is.")
+    let results = try await store.recall("What is it?")
+    #expect(results.map(\.id) == [memory.id])
+  }
+
+  @Test func defaultConfigurationIgnoresRecency() async throws {
+    #expect(RecallConfiguration().recencyWeight == 0)
+    let store = try MemoryStore.inMemory()
+    // The older memory matches the query better,
+    // and a newer memory with a weaker match must not move above it.
+    let older = try await store.remember(
+      "Tea with oat milk, tea every morning.", createdAt: Date(timeIntervalSince1970: 0))
+    let newer = try await store.remember(
+      "I once had tea in Lisbon, with friends, near the harbor, in the rain.",
+      createdAt: Date(timeIntervalSince1970: 1_000_000))
+    let results = try await store.recall("tea with oat milk")
+    #expect(results.map(\.id) == [older.id, newer.id])
+    #expect(results.allSatisfy { $0.recencyRank == nil })
   }
 }

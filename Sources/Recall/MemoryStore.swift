@@ -230,8 +230,14 @@ public actor MemoryStore {
 
   /// Returns the identifiers of memories that match the words in `query`,
   /// best match first by BM25.
-  func keywordSearch(_ query: String, limit: Int) throws -> [UUID] {
-    guard limit > 0, let match = KeywordQuery.match(for: query) else { return [] }
+  func keywordSearch(
+    _ query: String,
+    limit: Int,
+    ignoringStopWords: Bool = false
+  ) throws -> [UUID] {
+    guard limit > 0,
+      let match = KeywordQuery.match(for: query, ignoringStopWords: ignoringStopWords)
+    else { return [] }
     let statement = try database.prepare(
       """
       SELECT m.id FROM memories_fts

@@ -12,6 +12,7 @@ import Foundation
 /// The lists are:
 ///
 /// - term Keyword: Memories that contain words from the query, ordered by BM25.
+///   By default, the list ignores common English words, such as "the" and "my".
 /// - term Vector: Memories ordered by the cosine similarity of their vectors to the query's vector.
 ///   The store makes this list only if it has an ``Embedder``.
 /// - term Recency: The memories from the other two lists, newest first.
@@ -20,6 +21,7 @@ import Foundation
 ///
 /// A list with a weight of zero isn't made,
 /// and its rank in each result is `nil`.
+/// The recency list has a weight of zero by default.
 public struct RecallConfiguration: Hashable, Sendable {
   /// The constant that controls how fast a list's contribution falls with rank.
   ///
@@ -34,10 +36,25 @@ public struct RecallConfiguration: Hashable, Sendable {
   public var vectorWeight: Double
 
   /// The weight of the recency list.
+  ///
+  /// The default is zero, so recall doesn't make the list.
+  /// The list gives points to every candidate by its date,
+  /// so a recent memory that matches the query weakly
+  /// can move above an older memory that matches it well.
   public var recencyWeight: Double
 
   /// The maximum number of memories that the keyword and vector lists each contain.
   public var candidateLimit: Int
+
+  /// Whether the keyword list ignores common English words, such as "the", "my", and "when".
+  ///
+  /// The keyword list matches a memory that contains any word of the query,
+  /// so with these words, a question matches most memories,
+  /// and those weak matches can push a better match from the vector list down.
+  /// If every word of the query is a common word,
+  /// the keyword list uses them all.
+  /// The default is `true`.
+  public var ignoresStopWords: Bool
 
   /// The cosine similarity that a memory needs to be in the vector list,
   /// or `nil` to allow every memory with a vector.
@@ -49,14 +66,14 @@ public struct RecallConfiguration: Hashable, Sendable {
   ///
   /// With the default weights,
   /// the keyword and vector lists count equally,
-  /// and recency counts half as much as either.
-  /// Set `recencyWeight` to zero to ignore creation dates.
+  /// and creation dates don't count.
   public init(
     k: Double = 60,
     keywordWeight: Double = 1,
     vectorWeight: Double = 1,
-    recencyWeight: Double = 0.5,
+    recencyWeight: Double = 0,
     candidateLimit: Int = 50,
+    ignoresStopWords: Bool = true,
     minimumSimilarity: Float? = nil
   ) {
     self.k = k
@@ -64,6 +81,7 @@ public struct RecallConfiguration: Hashable, Sendable {
     self.vectorWeight = vectorWeight
     self.recencyWeight = recencyWeight
     self.candidateLimit = candidateLimit
+    self.ignoresStopWords = ignoresStopWords
     self.minimumSimilarity = minimumSimilarity
   }
 
@@ -197,7 +215,7 @@ extension MemoryStore {
   ///
   /// The store ranks memories by keywords,
   /// by vector similarity if it has an embedder,
-  /// and by recency,
+  /// and by recency if the configuration gives recency a weight,
   /// then merges the lists as ``RecallConfiguration`` describes.
   /// Before a vector search,
   /// the store embeds any memories that have no vector from the current embedder.
@@ -225,7 +243,11 @@ extension MemoryStore {
     let (keyword, vector, memories) = try database.read {
       let keyword =
         configuration.keywordWeight > 0
-        ? try keywordSearch(query, limit: configuration.candidateLimit) : []
+        ? try keywordSearch(
+          query,
+          limit: configuration.candidateLimit,
+          ignoringStopWords: configuration.ignoresStopWords
+        ) : []
       let vector =
         try queryVector.map {
           try vectorSearch(
