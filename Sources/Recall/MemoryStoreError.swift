@@ -18,6 +18,11 @@ public enum MemoryStoreError: Error, Hashable, Sendable {
   /// The text of a memory is empty or contains only whitespace.
   case emptyText
 
+  /// An embedder returned a vector that is empty, has zero length,
+  /// contains a value that isn't finite,
+  /// or has a different dimension than the embedder's other vectors.
+  case invalidEmbedding(embedder: String)
+
   /// The stored metadata of a memory isn't a JSON object of strings.
   case invalidMetadata(UUID)
 }
@@ -33,6 +38,8 @@ extension MemoryStoreError: LocalizedError {
       "No memory has the identifier \(id)."
     case .emptyText:
       "A memory must contain text."
+    case .invalidEmbedding(let embedder):
+      "The embedder \(embedder) returned a vector that the store can't use."
     case .invalidMetadata(let id):
       "The metadata of memory \(id) isn't valid."
     }

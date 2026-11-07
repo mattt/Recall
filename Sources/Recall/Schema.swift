@@ -38,7 +38,23 @@ enum Schema {
       INSERT INTO memories_fts (memories_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
       INSERT INTO memories_fts (rowid, text) VALUES (new.rowid, new.text);
     END;
+    """,
+    // Version 2: one embedding vector for each memory.
+    // `vector` holds `dimension` 32-bit floats of unit length, in host byte order.
+    // A change to the text of a memory deletes its vector.
     """
+    CREATE TABLE embeddings (
+      memory_rowid INTEGER PRIMARY KEY REFERENCES memories (rowid) ON DELETE CASCADE,
+      embedder TEXT NOT NULL,
+      dimension INTEGER NOT NULL,
+      vector BLOB NOT NULL
+    );
+    CREATE INDEX embeddings_embedder ON embeddings (embedder, dimension);
+    CREATE TRIGGER memories_after_update_text_embedding AFTER UPDATE OF text ON memories
+    WHEN old.text IS NOT new.text BEGIN
+      DELETE FROM embeddings WHERE memory_rowid = new.rowid;
+    END;
+    """,
   ]
 
   /// The schema version that this version of Recall creates.
