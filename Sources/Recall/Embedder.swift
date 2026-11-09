@@ -11,6 +11,12 @@ public enum EmbeddingPurpose: Sendable, Hashable {
   case document
 }
 
+/// An embedding error that can show that the text, not the embedder, caused it.
+protocol TextSpecificEmbeddingError: Error {
+  /// Whether the embedder works but can't make a vector for this text.
+  var isCausedByText: Bool { get }
+}
+
 /// A model that turns text into a vector for semantic search.
 ///
 /// An embedder is a value with an ``identifier``
@@ -44,6 +50,12 @@ public enum EmbeddingPurpose: Sendable, Hashable {
 ///
 /// Every vector from one embedder must have the same number of elements,
 /// for both purposes.
+///
+/// If the embedder can't make a vector for one text,
+/// return a zero vector or throw ``MemoryStoreError/invalidEmbedding(embedder:)``.
+/// The store can't tell what another error means,
+/// so it treats that error as a possible failure of the whole embedder.
+/// ``MemoryStore/reembed()`` describes the difference.
 public struct Embedder: Sendable {
   /// A string that identifies the model and its version,
   /// such as `"example-model-v2"`.

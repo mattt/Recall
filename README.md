@@ -189,6 +189,33 @@ All vectors from one embedder must have the same number of elements.
 If an embedder throws while the store saves a memory,
 the store doesn't save the memory.
 
+A memory that already exists can fail when the store embeds it later,
+for example when a store with no embedder saved it.
+During a recall, the store skips that memory and embeds the others.
+The memory stays out of vector search, and keyword search still finds it.
+The store records the failure in the database for the text and the embedder,
+so later searches don't pay to embed that memory again.
+A change to the text deletes the record,
+and each embedder has its own record.
+
+`reembed()` tries these memories again.
+It embeds every memory that it can,
+then throws `ReembeddingError`,
+which gives the number of vectors it saved and each memory that failed.
+
+A thrown error doesn't say whether one text or the whole embedder caused it.
+The store records a failure only after the embedder
+returns a usable vector for a different text or for the query,
+so an outage doesn't mark every memory as unembeddable.
+If the embedder returns nothing usable for eight memories in a row,
+or if it can't embed the query,
+`recall` and `reembed()` throw its error.
+A brief outage in the middle of a pass can still record a few memories;
+`reembed()` tries them again.
+To say that the cause is one text,
+an embedder can return a zero vector
+or throw `MemoryStoreError.invalidEmbedding(embedder:)`.
+
 ## Cancellation
 
 Each asynchronous method of `MemoryStore` checks for cancellation before it starts.
@@ -207,6 +234,8 @@ it stops waiting and throws `CancellationError`,
 but the work continues for the others.
 The store saves each vector as soon as the embedder returns it,
 so the vectors saved before an embedder error remain.
+An embedder that throws `CancellationError` stops the work,
+and the store doesn't record a failure for that memory.
 
 ## License
 

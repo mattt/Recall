@@ -31,8 +31,8 @@ public actor MemoryStore {
   /// The embedder that the store uses for vector search, if any.
   public nonisolated let embedder: Embedder?
 
-  /// The task that is embedding stale memories, if one is running.
-  private var reembedding: Task<Int, any Error>?
+  /// The pass that is embedding stale memories, if one is running.
+  private var reembedding: (task: Task<ReembeddingPass, any Error>, retriesFailures: Bool)?
 
   /// The number of calls that are waiting for ``reembedding``.
   private(set) var reembedWaiterCount = 0
@@ -263,38 +263,88 @@ public actor MemoryStore {
   ///
   /// Vectors from other embedders stay in the database.
   ///
-  /// Recall calls this method before a vector search,
-  /// so you don't need to call it.
+  /// Recall embeds stale memories before a vector search,
+  /// so you don't need to call this method.
   /// Call it after you open a store with a new embedder
-  /// to do the work before the first recall.
+  /// to do the work before the first recall,
+  /// or to try again the memories that recall skips.
+  ///
+  /// ## Failures
+  ///
+  /// This method continues after the embedder fails for one memory,
+  /// and it throws ``ReembeddingError`` after it embeds every memory that it can.
+  /// Unlike a recall, it also tries the memories that failed earlier.
+  ///
+  /// An error doesn't say whether one text or the whole embedder caused it.
+  /// The store remembers a failure only after the embedder
+  /// returns a usable vector for a different text,
+  /// so a memory that fails during an outage stays stale and isn't remembered.
+  /// After eight consecutive failures with no such vector,
+  /// the method stops and throws the embedder's error.
+  /// A zero vector or ``ContextualEmbedder/Error/noVectors``
+  /// shows that the cause is the text, so it doesn't count toward that limit.
   ///
   /// If another call is already embedding memories,
   /// this call waits for it and returns the same count.
+  /// If a recall started that work,
+  /// this call waits for it and then tries the memories that failed earlier.
   ///
   /// The work runs in a task that all waiting calls share.
   /// If the task that calls this method is canceled,
   /// this call stops waiting and throws `CancellationError`,
   /// but the shared work continues for the other calls.
   /// The store saves each vector as soon as the embedder returns it,
-  /// so if the embedder throws,
+  /// so if the method throws,
   /// the vectors that the work saved before the error remain,
   /// and a later call embeds only the memories that are still stale.
+  ///
+  /// - Returns: The number of vectors that the store saved.
+  /// - Throws: ``ReembeddingError`` if some memories couldn't be embedded,
+  ///   the embedder's error if the embedder keeps failing,
+  ///   ``MemoryStoreError/dimensionMismatch(embedder:expected:actual:)``
+  ///   if a vector doesn't match the vectors that the store saved from the embedder,
+  ///   or `CancellationError` if the task is canceled.
   @discardableResult
   public func reembed() async throws -> Int {
     try Task.checkCancellation()
     guard let embedder else { return 0 }
-    let task: Task<Int, any Error>
+    var embedded = 0
+    // A pass that a recall started skips the memories that failed earlier,
+    // so this call can't share it. It can start its own pass when that one ends.
+    while let running = reembedding, !running.retriesFailures {
+      embedded += try await wait(for: running.task).embedded
+    }
+    let pass = try await sharedPass(retryingFailures: true, with: embedder)
+    embedded += pass.embedded
+    guard pass.failures.isEmpty else {
+      throw ReembeddingError(embeddedCount: embedded, failures: pass.failures)
+    }
+    return embedded
+  }
+
+  /// Joins the running pass, or starts one if none is running,
+  /// and returns the result of the pass.
+  private func sharedPass(
+    retryingFailures: Bool,
+    with embedder: Embedder
+  ) async throws -> ReembeddingPass {
+    let task: Task<ReembeddingPass, any Error>
     if let reembedding {
-      task = reembedding
+      task = reembedding.task
     } else {
       // The task clears itself when it ends,
       // so a waiter that stops waiting doesn't let a second task start.
       task = Task {
         defer { reembedding = nil }
-        return try await embedStaleMemories(with: embedder)
+        return try await embedStaleMemories(with: embedder, retryingFailures: retryingFailures)
       }
-      reembedding = task
+      reembedding = (task, retryingFailures)
     }
+    return try await wait(for: task)
+  }
+
+  /// Returns the result of a pass, and counts this call as a waiter until it ends.
+  private func wait(for task: Task<ReembeddingPass, any Error>) async throws -> ReembeddingPass {
     reembedWaiterCount += 1
     defer { reembedWaiterCount -= 1 }
     return try await Self.value(of: task)
@@ -318,6 +368,8 @@ public actor MemoryStore {
   }
 
   /// The number of memories that have no vector from the current embedder.
+  ///
+  /// The count includes memories that the store couldn't embed.
   public func staleEmbeddingCount() throws -> Int {
     guard let embedder else { return 0 }
     let statement = try database.prepare(
@@ -333,24 +385,40 @@ public actor MemoryStore {
     return statement.int(at: 0)
   }
 
-  private func embedStaleMemories(with embedder: Embedder) async throws -> Int {
+  /// The number of consecutive failures with no sign that the text caused them
+  /// after which a pass stops.
+  private static let maximumConsecutiveUnexplainedFailures = 8
+
+  private func embedStaleMemories(
+    with embedder: Embedder,
+    retryingFailures: Bool
+  ) async throws -> ReembeddingPass {
     let batchSize = 64
-    var embedded = 0
+    let marker = Self.failureMarker(for: embedder)
+    var pass = ReembeddingPass()
+    var unexplainedFailures = 0
     // Skip rows that changed during embedding so the loop ends;
     // a later call tries them again.
     var lastRowid = 0
     while true {
+      // A pass that retries failures looks only for the embedder's vector,
+      // so it doesn't exclude a memory that has a failure marker.
       let statement = try database.prepare(
         """
         SELECT m.rowid, m.id, m.text FROM memories m
         WHERE NOT EXISTS (
-          SELECT 1 FROM embeddings e WHERE e.memory_rowid = m.rowid AND e.embedder = ?1
+          SELECT 1 FROM embeddings e WHERE e.memory_rowid = m.rowid AND e.embedder IN (?1, ?4)
         ) AND m.rowid > ?2
         ORDER BY m.rowid
         LIMIT ?3
         """
       )
-      try statement.bind(.text(embedder.identifier), .integer(lastRowid), .integer(batchSize))
+      try statement.bind(
+        .text(embedder.identifier),
+        .integer(lastRowid),
+        .integer(batchSize),
+        .text(retryingFailures ? embedder.identifier : marker)
+      )
       var batch: [StaleRow] = []
       while try statement.step() {
         batch.append(
@@ -361,10 +429,28 @@ public actor MemoryStore {
           )
         )
       }
-      guard !batch.isEmpty else { return embedded }
+      guard !batch.isEmpty else { return pass }
       for row in batch {
         lastRowid = row.rowid
-        let vector = try await normalizedEmbedding(for: row.text, with: embedder)
+        let vector: [Float]
+        do {
+          vector = try await normalizedEmbedding(for: row.text, with: embedder)
+        } catch {
+          if error is CancellationError { throw error }
+          // A failure for text that another connection replaced says nothing about the memory.
+          guard try isCurrent(row) else { continue }
+          guard let id = UUID(uuidString: row.id) else {
+            throw MemoryStoreError.sqlite(
+              code: 0, message: "A memory has an identifier that isn't a UUID.")
+          }
+          pass.failures.append(ReembeddingError.Failure(id: id, error: error))
+          pass.unconfirmed.append(row)
+          if !Self.isCausedByText(error) {
+            unexplainedFailures += 1
+            if unexplainedFailures >= Self.maximumConsecutiveUnexplainedFailures { throw error }
+          }
+          continue
+        }
         // Another task or connection can change or delete the memory while the embedder runs.
         // Check it and save the vector in one write transaction,
         // so that no other write can come between them.
@@ -373,18 +459,85 @@ public actor MemoryStore {
         let saved = try database.transaction { () throws(MemoryStoreError) -> Bool in
           guard try isCurrent(row) else { return false }
           try saveEmbedding(vector, rowid: row.rowid)
+          try removeFailureMarker(rowid: row.rowid, marker: marker)
           return true
         }
-        if saved { embedded += 1 }
+        if saved { pass.embedded += 1 }
+        // The embedder works, so the failures before this vector came from their texts.
+        unexplainedFailures = 0
+        try rememberFailures(of: pass.unconfirmed, marker: marker)
+        pass.unconfirmed = []
       }
     }
   }
 
+  /// The result of one pass over the stale memories.
+  private struct ReembeddingPass: Sendable {
+    /// The number of vectors that the pass saved.
+    var embedded = 0
+
+    /// The memories that the pass couldn't embed.
+    var failures: [ReembeddingError.Failure] = []
+
+    /// The memories that failed after the last usable vector from the embedder.
+    ///
+    /// The store doesn't remember these failures yet,
+    /// because the embedder might be unavailable.
+    var unconfirmed: [StaleRow] = []
+  }
+
   /// A memory that needs a vector from the current embedder.
-  private struct StaleRow {
+  private struct StaleRow: Sendable {
     var rowid: Int
     var id: String
     var text: String
+  }
+
+  /// Returns whether an embedding error shows that the text caused it.
+  private static func isCausedByText(_ error: any Error) -> Bool {
+    if case MemoryStoreError.invalidEmbedding = error { return true }
+    return (error as? any TextSpecificEmbeddingError)?.isCausedByText ?? false
+  }
+
+  /// Returns the name under which the store marks memories that `embedder` can't embed.
+  ///
+  /// A marker is a row in the `embeddings` table with this name, no dimension, and no vector.
+  /// The trigger and foreign key that delete a memory's vectors also delete its markers,
+  /// so a change to the text retries the memory,
+  /// and another embedder has a different marker.
+  /// The separate name keeps markers out of every query for an embedder's vectors,
+  /// including the queries in earlier versions of Recall.
+  private static func failureMarker(for embedder: Embedder) -> String {
+    "recall.embedding-failed/\(embedder.identifier)"
+  }
+
+  /// Marks memories as ones that the embedder can't embed,
+  /// so that a recall doesn't try them again.
+  private func rememberFailures(
+    of rows: [StaleRow],
+    marker: String
+  ) throws(MemoryStoreError) {
+    guard !rows.isEmpty else { return }
+    try database.transaction { () throws(MemoryStoreError) in
+      for row in rows {
+        guard try isCurrent(row) else { continue }
+        try database.prepare(
+          """
+          INSERT OR IGNORE INTO embeddings (memory_rowid, embedder, dimension, vector)
+          VALUES (?, ?, 0, x'')
+          """
+        )
+        .bind(.integer(row.rowid), .text(marker))
+        .step()
+      }
+    }
+  }
+
+  /// Deletes the mark that the embedder couldn't embed a memory.
+  private func removeFailureMarker(rowid: Int, marker: String) throws(MemoryStoreError) {
+    try database.prepare("DELETE FROM embeddings WHERE memory_rowid = ? AND embedder = ?")
+      .bind(.integer(rowid), .text(marker))
+      .step()
   }
 
   /// Returns whether the row still holds the memory with this identifier and text.
@@ -406,15 +559,22 @@ public actor MemoryStore {
     return try vectorSearch(vector, limit: limit, minimumSimilarity: minimumSimilarity)
   }
 
-  /// Embeds any stale memories, then returns the unit vector of `query`,
+  /// Embeds any stale memories that haven't failed before,
+  /// then returns the unit vector of `query`,
   /// or `nil` if the store has no embedder
   /// or the query's vector can't be normalized.
   func queryVector(for query: String) async throws -> [Float]? {
     guard let embedder else { return nil }
-    try await reembed()
+    try Task.checkCancellation()
+    let pass = try await sharedPass(retryingFailures: false, with: embedder)
     // A query vector that can't be normalized, such as the vector of punctuation,
     // matches nothing; it isn't an error.
-    return Vector.normalized(try await embedder.embed(query, for: .query))
+    guard let vector = Vector.normalized(try await embedder.embed(query, for: .query)) else {
+      return nil
+    }
+    // The embedder works, so the failures at the end of the pass came from their texts.
+    try rememberFailures(of: pass.unconfirmed, marker: Self.failureMarker(for: embedder))
+    return vector
   }
 
   /// Returns the identifiers of the memories whose vectors are most similar to a unit vector,

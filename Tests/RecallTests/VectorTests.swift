@@ -304,20 +304,20 @@ extension MemoryStore {
     }
 
     // Memories are embedded in the order they were saved,
-    // so "one" is saved before "two" fails, and "three" isn't reached.
+    // so "one" is saved before "two" fails, and "three" comes after it.
     let failing = SelectivelyFailingEmbedder(base: TestEmbedder(), failing: ["two"])
     let store = try MemoryStore(url: url, embedder: failing)
-    await #expect(throws: FailingEmbedder.Failure.self) {
+    await #expect(throws: ReembeddingError.self) {
       try await store.reembed()
     }
-    #expect(try await store.staleEmbeddingCount() == 2)
-    #expect(failing.base.calls.all == ["one"])
+    #expect(try await store.staleEmbeddingCount() == 1)
+    #expect(failing.base.calls.all == ["one", "three"])
 
     // A later call with a working embedder embeds only what is still stale.
     let embedder = TestEmbedder()
     let retry = try MemoryStore(url: url, embedder: embedder)
-    #expect(try await retry.reembed() == 2)
-    #expect(embedder.calls.all == ["two", "three"])
+    #expect(try await retry.reembed() == 1)
+    #expect(embedder.calls.all == ["two"])
   }
 }
 
