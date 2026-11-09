@@ -5,14 +5,22 @@ It keeps an assistant's explicit memories:
 short text records that a user or an agent asks it to keep,
 such as "The user prefers tea to coffee."
 Recall saves them in a SQLite file
-and finds them again with keyword search,
-optional vector search,
-and recency,
+and finds them again with keyword search and optional vector search,
 merged with weighted reciprocal rank fusion.
 
 Recall has no dependencies outside the Swift toolchain and the operating system.
 It uses the system SQLite library and its FTS5 full-text search module.
 It requires Swift 6 and macOS 14 or iOS 17 or later.
+
+## Installation
+
+Add the following to your `Package.swift` file:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/mattt/Recall.git", from: "0.1.0")
+]
+```
 
 ## Remembering and recalling
 
@@ -199,3 +207,8 @@ it stops waiting and throws `CancellationError`,
 but the work continues for the others.
 The store saves each vector as soon as the embedder returns it,
 so the vectors saved before an embedder error remain.
+
+## License
+
+This project is available under the MIT license.
+See the LICENSE file for more info.
