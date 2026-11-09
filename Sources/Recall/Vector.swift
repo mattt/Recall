@@ -7,7 +7,8 @@ import Foundation
 /// Operations on embedding vectors.
 enum Vector {
   /// Returns `vector` scaled to unit length,
-  /// or `nil` if it is empty, has zero length, or contains a value that isn't finite.
+  /// or `nil` if it is empty, contains a value that isn't finite,
+  /// or has a calculated length that isn't a normal floating-point value.
   static func normalized(_ vector: [Float]) -> [Float]? {
     guard !vector.isEmpty, vector.allSatisfy(\.isFinite) else { return nil }
     let length = dot(vector, vector).squareRoot()

@@ -39,7 +39,7 @@
     }
 
     /// Identifies the model and its revision,
-    /// so that a store embeds its memories again when either changes.
+    /// so a store embeds its memories again when either changes.
     public nonisolated let identifier: String
 
     /// The identifier of the NaturalLanguage model.
@@ -117,11 +117,11 @@
       identifier = "NLContextualEmbedding/\(embedding.modelIdentifier)/\(embedding.revision)/mean"
     }
 
-    /// Makes sure that the model assets are on the device, and loads the model.
+    /// Downloads any missing model assets and loads the model.
     ///
     /// If the assets aren't on the device,
     /// this method asks the system to download them,
-    /// which can take some time and needs a network connection.
+    /// which needs a network connection.
     ///
     /// - Throws: ``Error/assetsUnavailable(modelIdentifier:)``
     ///   if the system can't provide the assets,

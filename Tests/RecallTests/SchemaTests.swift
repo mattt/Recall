@@ -136,4 +136,13 @@ import Testing
       try MemoryStore(url: url)
     }
   }
+
+  @Test func refusesNegativeSchema() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    try Database(url: url).execute("PRAGMA user_version = -1")
+    #expect(throws: MemoryStoreError.unsupportedSchemaVersion(-1)) {
+      try MemoryStore(url: url)
+    }
+  }
 }

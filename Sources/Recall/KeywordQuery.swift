@@ -9,7 +9,7 @@
 /// A quoted run is an FTS5 string, so FTS5 reads it only as a term to match.
 ///
 /// Because the runs are joined with `OR`,
-/// a common word such as "my" matches most memories.
+/// a common word such as "my" can match many memories.
 /// With `ignoringStopWords`,
 /// the query leaves out the words in ``stopWords``,
 /// unless every word of the text is a stop word.
@@ -39,11 +39,11 @@ enum KeywordQuery {
     return chosen.joined(separator: " OR ")
   }
 
-  /// Common English words that say little about which memory a query wants.
+  /// Common English words that say little about which memory a query seeks.
   ///
   /// The list has articles, pronouns, auxiliary verbs, prepositions, conjunctions,
-  /// question words, and the pieces of contractions that remain
-  /// after the text is split at apostrophes, such as the "s" of "Mirela's".
+  /// question words, and parts of contractions and possessives that remain
+  /// after splitting at apostrophes, such as the "s" in "Mirela's".
   /// It is in lowercase, and the comparison ignores case.
   static let stopWords: Set<String> = [
     "a", "about", "after", "all", "also", "am", "an", "and", "any", "are", "as", "at",

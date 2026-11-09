@@ -271,6 +271,7 @@ import Testing
     let store = try MemoryStore.inMemory(embedder: TestEmbedder())
     try await store.remember("tea")
     let results = try await store.recall("tea", configuration: configuration)
+    #expect(!results.isEmpty)
     #expect(results.allSatisfy { $0.score.isFinite })
   }
 
@@ -287,6 +288,18 @@ import Testing
     let everyWord = try await store.recall(
       "Where is my passport?", configuration: RecallConfiguration(ignoresStopWords: false))
     #expect(everyWord.count == 3)
+  }
+
+  @Test func stopWordsAreEnglishOnly() async throws {
+    let store = try MemoryStore.inMemory()
+    let memory = try await store.remember("Min by er Aarhus.")
+    // "By" means "city" in Danish, but it is on the English list.
+    let query = "Hvilken by bor jeg i?"
+    #expect(try await store.recall(query).isEmpty)
+
+    let results = try await store.recall(
+      query, configuration: RecallConfiguration(ignoresStopWords: false))
+    #expect(results.map(\.id) == [memory.id])
   }
 
   @Test func queryOfOnlyStopWordsStillMatches() async throws {

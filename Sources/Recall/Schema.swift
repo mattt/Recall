@@ -40,7 +40,7 @@ enum Schema {
     END;
     """,
     // Version 2: one embedding vector for each memory.
-    // `vector` holds `dimension` 32-bit floats of unit length, in host byte order.
+    // `vector` holds a unit vector of `dimension` 32-bit floats, in host byte order.
     // A change to the text of a memory deletes its vector.
     """
     CREATE TABLE embeddings (
@@ -56,10 +56,10 @@ enum Schema {
     END;
     """,
     // Version 3: one embedding vector for each memory and embedder,
-    // so that stores with different embedders can share a file
+    // so stores with different embedders can share a file
     // without replacing each other's vectors.
     // The trigger refers to the old table,
-    // so it is dropped before the table and created again after the rename.
+    // so drop it before the table and create it again after the rename.
     """
     DROP TRIGGER memories_after_update_text_embedding;
     CREATE TABLE embeddings_v3 (
@@ -98,7 +98,7 @@ enum Schema {
   ) throws(MemoryStoreError) {
     try database.transaction { () throws(MemoryStoreError) in
       let existing = try database.userVersion
-      guard existing <= migrations.count else {
+      guard (0...migrations.count).contains(existing) else {
         throw .unsupportedSchemaVersion(existing)
       }
       guard existing < version else { return }

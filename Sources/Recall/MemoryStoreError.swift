@@ -9,7 +9,8 @@ public enum MemoryStoreError: Error, Hashable, Sendable {
   /// The code is an extended SQLite result code.
   case sqlite(code: Int32, message: String)
 
-  /// The database has a schema version that is newer than this version of Recall supports.
+  /// The database has a schema version that this version of Recall doesn't support,
+  /// such as a newer version or an invalid negative one.
   case unsupportedSchemaVersion(Int)
 
   /// No memory has the identifier.
@@ -18,8 +19,7 @@ public enum MemoryStoreError: Error, Hashable, Sendable {
   /// The text of a memory is empty or contains only whitespace.
   case emptyText
 
-  /// An embedder returned a vector that is empty, has zero length,
-  /// or contains a value that isn't finite.
+  /// An embedder returned a vector that the store can't normalize.
   case invalidEmbedding(embedder: String)
 
   /// An embedder returned a vector with a different number of elements

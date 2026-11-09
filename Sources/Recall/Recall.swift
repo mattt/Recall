@@ -7,7 +7,7 @@ import Foundation
 /// A memory at rank `r` in a list with weight `w`
 /// gets `w / (k + r)` from that list,
 /// where ranks start at 1.
-/// The fused score of a memory is the sum over the lists that contain it.
+/// A memory's fused score is the sum of these contributions.
 ///
 /// The lists are:
 ///
@@ -49,14 +49,19 @@ public struct RecallConfiguration: Hashable, Sendable {
   /// Whether the keyword list ignores common English words, such as "the", "my", and "when".
   ///
   /// The keyword list matches a memory that contains any word of the query,
-  /// so with these words, a question matches most memories,
+  /// so these words can make a question match many memories,
   /// and those weak matches can push a better match from the vector list down.
   /// If every word of the query is a common word,
   /// the keyword list uses them all.
+  ///
+  /// The stop word list is English only, and the store does not check the language.
+  /// Some stop words have meaning in other languages.
+  /// For example, "by" means "city" in Danish.
+  /// Set this to `false` for memories or queries in other languages or in mixed languages.
   /// The default is `true`.
   public var ignoresStopWords: Bool
 
-  /// The cosine similarity that a memory needs to be in the vector list,
+  /// The minimum cosine similarity that a memory needs to be in the vector list,
   /// or `nil` to allow every memory with a vector.
   ///
   /// A value must be finite and in the range `-1...1`.
@@ -134,7 +139,7 @@ public struct RecallConfiguration: Hashable, Sendable {
   }
 }
 
-/// A memory that recall found, with the information that explains its position.
+/// A memory that recall found, with information that explains its rank.
 public struct RecallResult: Identifiable, Hashable, Sendable {
   /// The memory.
   public var memory: Memory
@@ -301,8 +306,7 @@ extension MemoryStore {
   }
 
   /// Orders memories newest first,
-  /// and by identifier when the dates are equal,
-  /// so that the order is stable.
+  /// then by identifier when the dates are equal to keep the order stable.
   static func newerFirst(_ left: Memory, _ right: Memory) -> Bool {
     left.createdAt != right.createdAt
       ? left.createdAt > right.createdAt : left.id.uuidString < right.id.uuidString
