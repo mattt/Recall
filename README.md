@@ -18,6 +18,7 @@ and Swift 6.
 ## Remembering and recalling
 
 ```swift
+import Foundation
 import Recall
 
 let directory = URL.applicationSupportDirectory
