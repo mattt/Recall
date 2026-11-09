@@ -19,8 +19,7 @@ public enum MemoryStoreError: Error, Hashable, Sendable {
   /// The text of a memory is empty or contains only whitespace.
   case emptyText
 
-  /// An embedder returned a vector that is empty, has zero length,
-  /// or contains a value that isn't finite.
+  /// An embedder returned a vector that the store can't normalize.
   case invalidEmbedding(embedder: String)
 
   /// An embedder returned a vector with a different number of elements

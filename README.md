@@ -12,8 +12,7 @@ merged with weighted reciprocal rank fusion.
 
 Recall has no dependencies outside the Swift toolchain and the operating system.
 It uses the system SQLite library and its FTS5 full-text search module.
-It requires macOS 14 or iOS 17 or later
-and Swift 6.
+It requires Swift 6 and macOS 14 or iOS 17 or later.
 
 ## Remembering and recalling
 
@@ -73,19 +72,20 @@ Recall makes up to three ranked lists for a query:
   so Recall leaves out common English words,
   such as "the", "my", and "when",
   unless the query has no other words.
-  The list is English only,
+  The stop word list is English only,
   so for memories or queries in other languages or in mixed languages,
   set `ignoresStopWords` to `false`:
   a word such as "by", which means "city" in Danish, would otherwise be left out.
 - **Vector**: memories ordered by the cosine similarity
   between their vectors and the query's vector.
-  Recall compares the query with every stored vector,
+  Recall compares the query's vector
+  with every stored vector from the current embedder,
   which is fast enough for thousands of memories.
   It uses Accelerate where it is available.
 - **Recency**: the memories from the other two lists, newest first.
   This list only reorders memories that the query found;
-  it never adds a memory that matches nothing.
-  It has a weight of zero by default, so Recall doesn't make it.
+  it doesn't add memories.
+  Its default weight is zero, so Recall doesn't make it.
 
 Each list contributes `weight / (k + rank)` to a memory's score,
 where ranks start at 1.
@@ -135,7 +135,7 @@ so a client can explain why a memory appears where it does.
 It takes the mean of the model's token vectors to get one vector for each text.
 The system downloads the model's assets on demand;
 call `prepare()` to download and load the model before the first recall.
-Its `embedder` property gives the value that a store takes.
+Pass its `embedder` property to the store.
 
 To use another model,
 create an `Embedder` with an identifier and a closure that returns a vector.
@@ -189,7 +189,7 @@ after they take the write lock and immediately before they commit.
 A call that is canceled by then rolls back,
 throws `CancellationError`, and saves nothing.
 The check before the commit is the decision point:
-a call that is canceled after it saves its change and returns normally.
+a call canceled after this check still saves its change and returns normally.
 
 Re-embedding is shared work.
 When several calls to `reembed()` or `recall` need it at the same time,

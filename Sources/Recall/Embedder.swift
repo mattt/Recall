@@ -1,4 +1,4 @@
-/// The use of a text that an ``Embedder`` embeds.
+/// The purpose of the text that an ``Embedder`` embeds.
 ///
 /// Many retrieval models embed queries and documents differently,
 /// usually by adding a prefix such as `"query: "` or `"passage: "` to the text.
@@ -25,14 +25,15 @@ public enum EmbeddingPurpose: Sendable, Hashable {
 /// ```
 ///
 /// A memory store calls ``embed(_:for:)`` with ``EmbeddingPurpose/document``
-/// for each memory that it saves or embeds again,
+/// for each memory's text that it embeds,
 /// and with ``EmbeddingPurpose/query`` for each query that it recalls,
 /// then compares vectors by cosine similarity.
 /// The store keeps the vectors of documents and never stores the vectors of queries.
 ///
 /// The store saves each vector with the embedder's ``identifier``.
 /// When you open a store with an embedder that has a different identifier,
-/// the store embeds each memory that has no vector from that embedder.
+/// the store embeds each memory that has no vector from that embedder
+/// before its next vector search.
 /// It keeps the vectors from other embedders,
 /// so stores with different embedders can share one database.
 /// Change the identifier whenever a change to the model or its settings
@@ -55,8 +56,7 @@ public struct Embedder: Sendable {
   /// - Parameters:
   ///   - identifier: A string that identifies the model and its version.
   ///     Change it whenever the vectors of documents would change.
-  ///   - embed: A closure that returns a vector
-  ///     for a text and the purpose of that text.
+  ///   - embed: A closure that returns a vector for the text and its purpose.
   public init(
     identifier: String,
     embed: @escaping @Sendable (String, EmbeddingPurpose) async throws -> [Float]

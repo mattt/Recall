@@ -18,12 +18,12 @@ import Foundation
 /// ## Cancellation
 ///
 /// Each asynchronous method checks for cancellation before it starts.
-/// A method that writes checks again inside its write transaction,
-/// after it takes the write lock and immediately before it commits.
+/// `remember` and `update` check again inside their write transaction,
+/// after they take the write lock and immediately before they commit.
 /// If the task is canceled by then,
 /// the method rolls back, throws `CancellationError`, and saves nothing.
 /// The check before the commit is the decision point:
-/// a call that is canceled after it saves its change and returns normally.
+/// a call canceled after this check still saves its change and returns normally.
 /// Re-embedding is the exception that ``reembed()`` describes.
 public actor MemoryStore {
   let database: Database
@@ -118,8 +118,7 @@ public actor MemoryStore {
   ///
   /// The identifier and creation date don't change.
   /// This method replaces all three fields with the values in `memory`,
-  /// so the last update to finish wins:
-  /// it discards a change that another call saved
+  /// so the last update to finish overwrites changes that another call saved
   /// after you read `memory`.
   /// To change only the text, call ``update(_:text:)``.
   ///
@@ -260,7 +259,7 @@ public actor MemoryStore {
   // MARK: - Vectors
 
   /// Embeds each memory that has no vector from the current embedder,
-  /// and returns the number of memories that it embedded.
+  /// and returns the number of vectors it saved.
   ///
   /// Vectors from other embedders stay in the database.
   ///
@@ -337,7 +336,7 @@ public actor MemoryStore {
   private func embedStaleMemories(with embedder: Embedder) async throws -> Int {
     let batchSize = 64
     var embedded = 0
-    // Rows that fail are skipped so that the loop ends;
+    // Skip rows that changed during embedding so the loop ends;
     // a later call tries them again.
     var lastRowid = 0
     while true {
@@ -431,7 +430,7 @@ public actor MemoryStore {
     return results.filter { $0.similarity >= minimumSimilarity }
   }
 
-  /// Returns the memories nearest to a unit vector by exact cosine similarity.
+  /// Returns memory identifiers and cosine similarities, most similar first.
   private func nearest(
     to query: [Float],
     embedder: String,
@@ -616,7 +615,7 @@ private final class Waiter<T: Sendable>: @unchecked Sendable {
   }
 
   /// Records `result` and resumes the waiting continuation,
-  /// unless an earlier result arrived first.
+  /// unless a result has already arrived.
   func finish(_ result: Result<T, any Error>) {
     let continuation = lock.withLock { () -> CheckedContinuation<T, any Error>? in
       guard self.result == nil else { return nil }

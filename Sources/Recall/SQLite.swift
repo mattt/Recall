@@ -9,7 +9,7 @@ import Foundation
 /// The destructor value that tells SQLite to copy bound text and blobs.
 private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-/// A thin wrapper around one SQLite connection.
+/// A wrapper around one SQLite connection.
 ///
 /// This type isn't thread-safe.
 /// `MemoryStore` owns one instance
@@ -110,7 +110,7 @@ final class Database {
   /// Runs `body` in a write transaction that commits only if the current task isn't canceled.
   ///
   /// The transaction checks for cancellation after it takes the write lock,
-  /// which can wait for another connection,
+  /// which can require waiting for another connection,
   /// and again immediately before `COMMIT`.
   /// If the task is canceled at either check,
   /// the transaction rolls back and throws `CancellationError`.
@@ -246,7 +246,7 @@ final class Statement {
     sqlite3_column_double(handle, column)
   }
 
-  /// Returns the text in a column, or `nil` if the value is NULL.
+  /// Returns the text in a column, or `nil` if the value is `NULL`.
   ///
   /// The length comes from SQLite,
   /// so a NUL character in the value is kept.
