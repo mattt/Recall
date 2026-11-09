@@ -289,6 +289,18 @@ import Testing
     #expect(everyWord.count == 3)
   }
 
+  @Test func stopWordsAreEnglishOnly() async throws {
+    let store = try MemoryStore.inMemory()
+    let memory = try await store.remember("Min by er Aarhus.")
+    // "By" means "city" in Danish, but it is on the English list.
+    let query = "Hvilken by bor jeg i?"
+    #expect(try await store.recall(query).isEmpty)
+
+    let results = try await store.recall(
+      query, configuration: RecallConfiguration(ignoresStopWords: false))
+    #expect(results.map(\.id) == [memory.id])
+  }
+
   @Test func queryOfOnlyStopWordsStillMatches() async throws {
     let store = try MemoryStore.inMemory()
     let memory = try await store.remember("It is what it is.")

@@ -53,6 +53,11 @@ public struct RecallConfiguration: Hashable, Sendable {
   /// and those weak matches can push a better match from the vector list down.
   /// If every word of the query is a common word,
   /// the keyword list uses them all.
+  ///
+  /// The list is English only and has no language check,
+  /// and some of its words have meaning in other languages.
+  /// For example, "by" means "city" in Danish.
+  /// Set this to `false` for memories or queries in other languages or in mixed languages.
   /// The default is `true`.
   public var ignoresStopWords: Bool
 

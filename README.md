@@ -72,6 +72,10 @@ Recall makes up to three ranked lists for a query:
   so Recall leaves out common English words,
   such as "the", "my", and "when",
   unless the query has no other words.
+  The list is English only,
+  so for memories or queries in other languages or in mixed languages,
+  set `ignoresStopWords` to `false`:
+  a word such as "by", which means "city" in Danish, would otherwise be left out.
 - **Vector**: memories ordered by the cosine similarity
   between their vectors and the query's vector.
   Recall compares the query with every stored vector,
