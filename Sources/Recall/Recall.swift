@@ -12,6 +12,7 @@ import Foundation
 /// The lists are:
 ///
 /// - term Keyword: Memories that contain words from the query, ordered by BM25.
+///   By default, the list ignores common English words, such as "the" and "my".
 /// - term Vector: Memories ordered by the cosine similarity of their vectors to the query's vector.
 ///   The store makes this list only if it has an ``Embedder``.
 /// - term Recency: The memories from the other two lists, newest first.
@@ -20,6 +21,7 @@ import Foundation
 ///
 /// A list with a weight of zero isn't made,
 /// and its rank in each result is `nil`.
+/// The recency list has a weight of zero by default.
 public struct RecallConfiguration: Hashable, Sendable {
   /// The constant that controls how fast a list's contribution falls with rank.
   ///
@@ -34,27 +36,44 @@ public struct RecallConfiguration: Hashable, Sendable {
   public var vectorWeight: Double
 
   /// The weight of the recency list.
+  ///
+  /// The default is zero, so recall doesn't make the list.
+  /// The list gives points to every candidate by its date,
+  /// so a recent memory that matches the query weakly
+  /// can move above an older memory that matches it well.
   public var recencyWeight: Double
 
   /// The maximum number of memories that the keyword and vector lists each contain.
   public var candidateLimit: Int
 
+  /// Whether the keyword list ignores common English words, such as "the", "my", and "when".
+  ///
+  /// The keyword list matches a memory that contains any word of the query,
+  /// so with these words, a question matches most memories,
+  /// and those weak matches can push a better match from the vector list down.
+  /// If every word of the query is a common word,
+  /// the keyword list uses them all.
+  /// The default is `true`.
+  public var ignoresStopWords: Bool
+
   /// The cosine similarity that a memory needs to be in the vector list,
   /// or `nil` to allow every memory with a vector.
+  ///
+  /// A value must be finite and in the range `-1...1`.
   public var minimumSimilarity: Float?
 
   /// Creates a configuration.
   ///
   /// With the default weights,
   /// the keyword and vector lists count equally,
-  /// and recency counts half as much as either.
-  /// Set `recencyWeight` to zero to ignore creation dates.
+  /// and creation dates don't count.
   public init(
     k: Double = 60,
     keywordWeight: Double = 1,
     vectorWeight: Double = 1,
-    recencyWeight: Double = 0.5,
+    recencyWeight: Double = 0,
     candidateLimit: Int = 50,
+    ignoresStopWords: Bool = true,
     minimumSimilarity: Float? = nil
   ) {
     self.k = k
@@ -62,21 +81,55 @@ public struct RecallConfiguration: Hashable, Sendable {
     self.vectorWeight = vectorWeight
     self.recencyWeight = recencyWeight
     self.candidateLimit = candidateLimit
+    self.ignoresStopWords = ignoresStopWords
     self.minimumSimilarity = minimumSimilarity
   }
 
   /// Throws if a value can't produce meaningful scores.
   func validate() throws(MemoryStoreError) {
-    guard k.isFinite, k >= 0 else {
-      throw .invalidConfiguration("k must be a finite number that isn't negative.")
+    guard k.isFinite, k >= 0 else { throw .invalidConfiguration(.k) }
+    let weights = [keywordWeight, vectorWeight, recencyWeight]
+    for weight in weights {
+      guard weight.isFinite, weight >= 0 else { throw .invalidConfiguration(.weight) }
     }
-    for weight in [keywordWeight, vectorWeight, recencyWeight] {
-      guard weight.isFinite, weight >= 0 else {
-        throw .invalidConfiguration("Each weight must be a finite number that isn't negative.")
+    // The highest possible score puts a memory at rank 1 in every list.
+    // Floating-point addition and division are monotonic,
+    // so if this sum is finite, every fused score is finite.
+    let highestScore = weights.reduce(0) { $0 + $1 / (k + 1) }
+    guard highestScore.isFinite else { throw .invalidConfiguration(.scoreOverflow) }
+    guard candidateLimit > 0 else { throw .invalidConfiguration(.candidateLimit) }
+    if let minimumSimilarity {
+      guard minimumSimilarity.isFinite, (-1...1).contains(minimumSimilarity) else {
+        throw .invalidConfiguration(.minimumSimilarity)
       }
     }
-    guard candidateLimit > 0 else {
-      throw .invalidConfiguration("candidateLimit must be greater than zero.")
+  }
+
+  /// A reason that a configuration isn't valid.
+  public enum Problem: Hashable, Sendable, CustomStringConvertible {
+    /// `k` isn't finite, or it is negative.
+    case k
+
+    /// A weight isn't finite, or it is negative.
+    case weight
+
+    /// The weights are so large that a fused score would overflow to infinity.
+    case scoreOverflow
+
+    /// `candidateLimit` isn't greater than zero.
+    case candidateLimit
+
+    /// `minimumSimilarity` isn't finite, or it is outside the range `-1...1`.
+    case minimumSimilarity
+
+    public var description: String {
+      switch self {
+      case .k: "k must be a finite number that isn't negative."
+      case .weight: "Each weight must be a finite number that isn't negative."
+      case .scoreOverflow: "The weights are too large: a fused score would be infinite."
+      case .candidateLimit: "candidateLimit must be greater than zero."
+      case .minimumSimilarity: "minimumSimilarity must be a finite number from -1 to 1."
+      }
     }
   }
 }
@@ -162,7 +215,7 @@ extension MemoryStore {
   ///
   /// The store ranks memories by keywords,
   /// by vector similarity if it has an embedder,
-  /// and by recency,
+  /// and by recency if the configuration gives recency a weight,
   /// then merges the lists as ``RecallConfiguration`` describes.
   /// Before a vector search,
   /// the store embeds any memories that have no vector from the current embedder.
@@ -178,25 +231,37 @@ extension MemoryStore {
     limit: Int = 10,
     configuration: RecallConfiguration = RecallConfiguration()
   ) async throws -> [RecallResult] {
+    try Task.checkCancellation()
     try configuration.validate()
     guard limit > 0 else { return [] }
 
-    let keyword =
-      configuration.keywordWeight > 0
-      ? try keywordSearch(query, limit: configuration.candidateLimit) : []
-    let vector =
-      configuration.vectorWeight > 0
-      ? try await vectorSearch(
-        query,
-        limit: configuration.candidateLimit,
-        minimumSimilarity: configuration.minimumSimilarity
-      ) : []
-
-    // Load each candidate once.
-    // A memory that was forgotten during the vector search is skipped.
-    var memories: [UUID: Memory] = [:]
-    for id in keyword + vector.map(\.id) where memories[id] == nil {
-      memories[id] = try memory(id)
+    // Finish the work that suspends before reading any rankings.
+    // Another task can change memories while the embedder runs,
+    // so the rankings and the memories must come from one later snapshot.
+    let queryVector =
+      configuration.vectorWeight > 0 ? try await queryVector(for: query) : nil
+    let (keyword, vector, memories) = try database.read {
+      let keyword =
+        configuration.keywordWeight > 0
+        ? try keywordSearch(
+          query,
+          limit: configuration.candidateLimit,
+          ignoringStopWords: configuration.ignoresStopWords
+        ) : []
+      let vector =
+        try queryVector.map {
+          try vectorSearch(
+            $0,
+            limit: configuration.candidateLimit,
+            minimumSimilarity: configuration.minimumSimilarity
+          )
+        } ?? []
+      // Load each candidate once.
+      var memories: [UUID: Memory] = [:]
+      for id in keyword + vector.map(\.id) where memories[id] == nil {
+        memories[id] = try memory(id)
+      }
+      return (keyword, vector, memories)
     }
 
     let recency =

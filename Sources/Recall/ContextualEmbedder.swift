@@ -17,13 +17,15 @@
   /// and loads the model.
   /// Call ``prepare()`` to do this work before you need a vector.
   ///
+  /// Pass the ``embedder`` property to a memory store:
+  ///
   /// ```swift
-  /// let embedder = try ContextualEmbedder(language: .english)
-  /// try await embedder.prepare()
-  /// let store = try MemoryStore(url: url, embedder: embedder)
+  /// let contextual = try ContextualEmbedder(language: .english)
+  /// try await contextual.prepare()
+  /// let store = try MemoryStore(url: url, embedder: contextual.embedder)
   /// ```
   @available(macOS 14, iOS 17, tvOS 17, watchOS 10, visionOS 1, *)
-  public actor ContextualEmbedder: Embedder {
+  public actor ContextualEmbedder {
     /// An error that a contextual embedder throws.
     public enum Error: Swift.Error, Hashable, Sendable {
       /// The system has no contextual embedding model for the language, script, or identifier.
@@ -58,6 +60,16 @@
 
     private let embedding: NLContextualEmbedding
     private var isLoaded = false
+
+    /// An embedder for a memory store that calls ``embed(_:for:)`` on this actor.
+    ///
+    /// The embedder keeps this actor alive,
+    /// so the model stays loaded between embeddings.
+    public nonisolated var embedder: Embedder {
+      Embedder(identifier: identifier) { text, purpose in
+        try await self.embed(text, for: purpose)
+      }
+    }
 
     /// Creates an embedder with the most recent model for a language.
     ///
@@ -135,7 +147,12 @@
       isLoaded = false
     }
 
-    public func embed(_ text: String) async throws -> [Float] {
+    /// Returns the mean of the model's token vectors for `text`.
+    ///
+    /// The NaturalLanguage model has no separate form for queries and documents,
+    /// so this embedder ignores `purpose`
+    /// and returns the same vector for both.
+    public func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float] {
       try await prepare()
       let result = try embedding.embeddingResult(for: text, language: language)
       var sum = [Double](repeating: 0, count: dimension)

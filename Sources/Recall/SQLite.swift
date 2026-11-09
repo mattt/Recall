@@ -15,7 +15,10 @@ private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 /// `MemoryStore` owns one instance
 /// and uses it only from the actor's isolation domain.
 final class Database {
-  private let handle: OpaquePointer
+  /// The connection handle.
+  ///
+  /// Only this file and tests use it directly.
+  let handle: OpaquePointer
 
   /// Opens the database at a file URL,
   /// or a private in-memory database if the URL is `nil`.
@@ -27,12 +30,15 @@ final class Database {
     guard let handle else {
       throw .sqlite(code: code, message: "Cannot open the database at \(path).")
     }
-    self.handle = handle
+    // Assign the stored property only after the open succeeds.
+    // An initializer that throws after it initializes every stored property
+    // runs `deinit`, which would close the handle a second time.
     guard code == SQLITE_OK else {
       let message = String(cString: sqlite3_errmsg(handle))
       sqlite3_close_v2(handle)
       throw .sqlite(code: code, message: message)
     }
+    self.handle = handle
     sqlite3_busy_timeout(handle, 5_000)
     sqlite3_extended_result_codes(handle, 1)
   }
@@ -101,6 +107,45 @@ final class Database {
     }
   }
 
+  /// Runs `body` in a write transaction that commits only if the current task isn't canceled.
+  ///
+  /// The transaction checks for cancellation after it takes the write lock,
+  /// which can wait for another connection,
+  /// and again immediately before `COMMIT`.
+  /// If the task is canceled at either check,
+  /// the transaction rolls back and throws `CancellationError`.
+  /// The check before `COMMIT` is the decision point:
+  /// a cancellation that arrives after it doesn't undo the commit.
+  func cancellableTransaction<T>(_ body: () throws(MemoryStoreError) -> T) throws -> T {
+    try execute("BEGIN IMMEDIATE")
+    do {
+      try Task.checkCancellation()
+      let value = try body()
+      try Task.checkCancellation()
+      try execute("COMMIT")
+      return value
+    } catch {
+      try? execute("ROLLBACK")
+      throw error
+    }
+  }
+
+  /// Runs `body` in a read transaction,
+  /// so that every statement in it reads the same snapshot of the database.
+  ///
+  /// `body` must not write.
+  func read<T>(_ body: () throws -> T) throws -> T {
+    try execute("BEGIN DEFERRED")
+    do {
+      let value = try body()
+      try execute("COMMIT")
+      return value
+    } catch {
+      try? execute("ROLLBACK")
+      throw error
+    }
+  }
+
   /// The number of rows that the most recent statement changed.
   var changes: Int {
     Int(sqlite3_changes(handle))
@@ -144,7 +189,7 @@ final class Statement {
       case .real(let real):
         code = sqlite3_bind_double(handle, index, real)
       case .text(let text):
-        code = sqlite3_bind_text(handle, index, text, -1, transient)
+        code = Self.bind(text, to: handle, at: index)
       case .blob(let data):
         code = data.withUnsafeBytes { buffer in
           sqlite3_bind_blob(handle, index, buffer.baseAddress, Int32(buffer.count), transient)
@@ -155,6 +200,22 @@ final class Statement {
       }
     }
     return self
+  }
+
+  /// Binds the UTF-8 bytes of `text` with an explicit length,
+  /// so that a NUL character doesn't end the value early.
+  private static func bind(_ text: String, to handle: OpaquePointer, at index: Int32) -> Int32 {
+    var text = text
+    return text.withUTF8 { buffer in
+      // A null pointer binds SQL NULL, so an empty string needs a real pointer.
+      guard let base = buffer.baseAddress, !buffer.isEmpty else {
+        return sqlite3_bind_text64(handle, index, "", 0, transient, UInt8(SQLITE_UTF8))
+      }
+      return base.withMemoryRebound(to: CChar.self, capacity: buffer.count) { pointer in
+        sqlite3_bind_text64(
+          handle, index, pointer, sqlite3_uint64(buffer.count), transient, UInt8(SQLITE_UTF8))
+      }
+    }
   }
 
   /// Advances to the next row.
@@ -185,9 +246,16 @@ final class Statement {
     sqlite3_column_double(handle, column)
   }
 
+  /// Returns the text in a column, or `nil` if the value is NULL.
+  ///
+  /// The length comes from SQLite,
+  /// so a NUL character in the value is kept.
   func text(at column: Int32) -> String? {
+    // `sqlite3_column_bytes` must follow `sqlite3_column_text`,
+    // so that it counts the bytes of the converted text.
     guard let pointer = sqlite3_column_text(handle, column) else { return nil }
-    return String(cString: pointer)
+    let count = Int(sqlite3_column_bytes(handle, column))
+    return String(decoding: UnsafeBufferPointer(start: pointer, count: count), as: UTF8.self)
   }
 
   func data(at column: Int32) -> Data {

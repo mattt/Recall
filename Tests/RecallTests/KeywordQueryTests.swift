@@ -12,6 +12,25 @@ import Testing
     #expect(KeywordQuery.match(for: "Tea tea TEA") == #""Tea""#)
   }
 
+  @Test func leavesOutStopWordsWhenAsked() {
+    #expect(
+      KeywordQuery.match(for: "When is Mirela's birthday?", ignoringStopWords: true)
+        == #""Mirela" OR "birthday""#)
+    #expect(
+      KeywordQuery.match(for: "When is Mirela's birthday?")
+        == #""When" OR "is" OR "Mirela" OR "s" OR "birthday""#)
+  }
+
+  @Test func stopWordsIgnoreCase() {
+    #expect(KeywordQuery.match(for: "THE Tea", ignoringStopWords: true) == #""Tea""#)
+  }
+
+  @Test func keepsStopWordsWhenNothingElseRemains() {
+    #expect(
+      KeywordQuery.match(for: "Who is it?", ignoringStopWords: true)
+        == #""Who" OR "is" OR "it""#)
+  }
+
   @Test func doublesQuotationMarks() {
     #expect(KeywordQuery.quoted(#"say "hi""#) == #""say ""hi""""#)
   }

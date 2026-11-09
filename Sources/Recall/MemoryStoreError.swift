@@ -2,7 +2,7 @@ import Foundation
 
 /// An error that a memory store throws.
 ///
-/// Errors from an ``Embedder`` pass through unchanged.
+/// Errors that an ``Embedder`` throws pass through unchanged.
 public enum MemoryStoreError: Error, Hashable, Sendable {
   /// SQLite returned an error.
   ///
@@ -19,12 +19,18 @@ public enum MemoryStoreError: Error, Hashable, Sendable {
   case emptyText
 
   /// An embedder returned a vector that is empty, has zero length,
-  /// contains a value that isn't finite,
-  /// or has a different dimension than the embedder's other vectors.
+  /// or contains a value that isn't finite.
   case invalidEmbedding(embedder: String)
 
+  /// An embedder returned a vector with a different number of elements
+  /// than the vectors that the store saved from it.
+  ///
+  /// The store throws this error when it saves a memory's vector
+  /// and when it compares a query's vector with the saved vectors.
+  case dimensionMismatch(embedder: String, expected: Int, actual: Int)
+
   /// A ``RecallConfiguration`` has a value that can't produce meaningful scores.
-  case invalidConfiguration(String)
+  case invalidConfiguration(RecallConfiguration.Problem)
 
   /// The stored metadata of a memory isn't a JSON object of strings.
   case invalidMetadata(UUID)
@@ -43,8 +49,10 @@ extension MemoryStoreError: LocalizedError {
       "A memory must contain text."
     case .invalidEmbedding(let embedder):
       "The embedder \(embedder) returned a vector that the store can't use."
-    case .invalidConfiguration(let reason):
-      "The recall configuration isn't valid. \(reason)"
+    case .dimensionMismatch(let embedder, let expected, let actual):
+      "The embedder \(embedder) returned a vector with \(actual) elements instead of \(expected)."
+    case .invalidConfiguration(let problem):
+      "The recall configuration isn't valid. \(problem.description)"
     case .invalidMetadata(let id):
       "The metadata of memory \(id) isn't valid."
     }

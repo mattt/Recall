@@ -55,6 +55,30 @@ enum Schema {
       DELETE FROM embeddings WHERE memory_rowid = new.rowid;
     END;
     """,
+    // Version 3: one embedding vector for each memory and embedder,
+    // so that stores with different embedders can share a file
+    // without replacing each other's vectors.
+    // The trigger refers to the old table,
+    // so it is dropped before the table and created again after the rename.
+    """
+    DROP TRIGGER memories_after_update_text_embedding;
+    CREATE TABLE embeddings_v3 (
+      memory_rowid INTEGER NOT NULL REFERENCES memories (rowid) ON DELETE CASCADE,
+      embedder TEXT NOT NULL,
+      dimension INTEGER NOT NULL,
+      vector BLOB NOT NULL,
+      PRIMARY KEY (memory_rowid, embedder)
+    );
+    INSERT INTO embeddings_v3 (memory_rowid, embedder, dimension, vector)
+    SELECT memory_rowid, embedder, dimension, vector FROM embeddings;
+    DROP TABLE embeddings;
+    ALTER TABLE embeddings_v3 RENAME TO embeddings;
+    CREATE INDEX embeddings_embedder ON embeddings (embedder, dimension);
+    CREATE TRIGGER memories_after_update_text_embedding AFTER UPDATE OF text ON memories
+    WHEN old.text IS NOT new.text BEGIN
+      DELETE FROM embeddings WHERE memory_rowid = new.rowid;
+    END;
+    """,
   ]
 
   /// The schema version that this version of Recall creates.
@@ -64,14 +88,17 @@ enum Schema {
   ///
   /// The migration runs in one write transaction,
   /// so two connections that open the same file at the same time
-  /// don't both apply it.
+  /// don't both apply it,
+  /// and a migration that fails leaves the schema and its version unchanged.
+  /// Tests can supply other `migrations`.
   static func migrate(
     _ database: Database,
-    to version: Int = currentVersion
+    to version: Int = currentVersion,
+    migrations: [String] = migrations
   ) throws(MemoryStoreError) {
     try database.transaction { () throws(MemoryStoreError) in
       let existing = try database.userVersion
-      guard existing <= currentVersion else {
+      guard existing <= migrations.count else {
         throw .unsupportedSchemaVersion(existing)
       }
       guard existing < version else { return }

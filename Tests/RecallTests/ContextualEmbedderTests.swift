@@ -17,7 +17,7 @@
   struct ContextualEmbedderTests {
     @Test func vectorsHaveTheModelDimension() async throws {
       let embedder = try ContextualEmbedder(language: .english)
-      let vector = try await embedder.embed("The user prefers tea to coffee.")
+      let vector = try await embedder.embed("The user prefers tea to coffee.", for: .document)
       #expect(vector.count == embedder.dimension)
       #expect(vector.allSatisfy { $0.isFinite })
     }
@@ -28,17 +28,32 @@
       #expect(embedder.identifier.contains("/\(embedder.revision)/"))
     }
 
+    @Test func embedderValueMatchesTheActor() async throws {
+      let contextual = try ContextualEmbedder(language: .english)
+      let embedder = contextual.embedder
+      #expect(embedder.identifier == contextual.identifier)
+      let direct = try await contextual.embed("The user prefers tea.", for: .document)
+      #expect(try await embedder.embed("The user prefers tea.", for: .document) == direct)
+    }
+
     @Test func embeddingIsDeterministic() async throws {
       let embedder = try ContextualEmbedder(language: .english)
-      let first = try await embedder.embed("Same text twice.")
-      let second = try await embedder.embed("Same text twice.")
+      let first = try await embedder.embed("Same text twice.", for: .document)
+      let second = try await embedder.embed("Same text twice.", for: .document)
       #expect(first == second)
+    }
+
+    @Test func purposeDoesNotChangeTheVector() async throws {
+      let embedder = try ContextualEmbedder(language: .english)
+      let document = try await embedder.embed("The user prefers tea.", for: .document)
+      let query = try await embedder.embed("The user prefers tea.", for: .query)
+      #expect(document == query)
     }
 
     @Test func relatedTextIsMoreSimilar() async throws {
       let embedder = try ContextualEmbedder(language: .english)
       func unit(_ text: String) async throws -> [Float] {
-        try #require(Vector.normalized(try await embedder.embed(text)))
+        try #require(Vector.normalized(try await embedder.embed(text, for: .document)))
       }
       let query = try await unit("What does the user like to drink?")
       let related = try await unit("The user prefers tea to coffee.")
@@ -47,7 +62,8 @@
     }
 
     @Test func storeRecallsWithoutSharedWords() async throws {
-      let store = try MemoryStore.inMemory(embedder: try ContextualEmbedder(language: .english))
+      let store = try MemoryStore.inMemory(
+        embedder: try ContextualEmbedder(language: .english).embedder)
       let drink = try await store.remember("The user prefers tea to coffee.")
       try await store.remember("The car needs new tires before winter.")
       let results = try await store.recall(

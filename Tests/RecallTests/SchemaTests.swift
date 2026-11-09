@@ -46,6 +46,87 @@ import Testing
     #expect(try await store.vectorSearch("version 1", limit: 10).map(\.id) == [id])
   }
 
+  @Test func migratesVersion2DatabaseAndKeepsVectors() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    let id = UUID()
+    do {
+      let database = try Database(url: url)
+      try database.execute("PRAGMA foreign_keys = ON")
+      try Schema.migrate(database, to: 2)
+      try database.prepare("INSERT INTO memories (id, text, created_at) VALUES (?, ?, ?)")
+        .bind(.text(id.uuidString), .text("cats"), .real(0))
+        .step()
+      try database.prepare(
+        """
+        INSERT INTO embeddings (memory_rowid, embedder, dimension, vector)
+        SELECT rowid, 'test-v1', 2, ? FROM memories
+        """
+      )
+      .bind(.blob(Vector.encode([1, 0])))
+      .step()
+      #expect(try database.userVersion == 2)
+    }
+
+    let embedder = TestEmbedder(vectors: ["query": [1, 0], "dogs": [0, 1]])
+    let store = try MemoryStore(url: url, embedder: embedder)
+    #expect(try Database(url: url).userVersion == Schema.currentVersion)
+
+    // The version 2 vector is still there, so nothing is embedded again.
+    #expect(try await store.staleEmbeddingCount() == 0)
+    let results = try await store.vectorSearch("query", limit: 10)
+    #expect(results.map(\.id) == [id])
+    #expect(embedder.calls.all == ["query"])
+
+    // A second embedder adds its own vector beside the first.
+    let other = try MemoryStore(url: url, embedder: TestEmbedder(identifier: "test-v2"))
+    #expect(try await other.reembed() == 1)
+    #expect(try await store.staleEmbeddingCount() == 0)
+
+    // The migrated trigger still deletes every vector when the text changes.
+    try await MemoryStore(url: url).update(id, text: "dogs")
+    #expect(try await store.staleEmbeddingCount() == 1)
+    #expect(try await other.staleEmbeddingCount() == 1)
+  }
+
+  @Test func failedMigrationRollsBackSchemaAndVersion() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    let database = try Database(url: url)
+    try Schema.migrate(database)
+    let schemaBefore = try Self.schema(of: database)
+
+    // The next migration changes the schema, then fails.
+    let failing = """
+      CREATE TABLE added (value TEXT);
+      ALTER TABLE memories ADD COLUMN extra TEXT;
+      INSERT INTO missing_table VALUES (1);
+      """
+    #expect(throws: MemoryStoreError.self) {
+      try Schema.migrate(
+        database,
+        to: Schema.currentVersion + 1,
+        migrations: Schema.migrations + [failing]
+      )
+    }
+    #expect(try database.userVersion == Schema.currentVersion)
+    #expect(try Self.schema(of: database) == schemaBefore)
+
+    // The store still opens the file.
+    #expect(try await MemoryStore(url: url).count() == 0)
+  }
+
+  /// Returns the SQL of every table, index, and trigger, by name.
+  static func schema(of database: Database) throws -> [String: String] {
+    let statement = try database.prepare(
+      "SELECT name, sql FROM sqlite_schema WHERE sql IS NOT NULL")
+    var schema: [String: String] = [:]
+    while try statement.step() {
+      schema[statement.text(at: 0) ?? ""] = statement.text(at: 1)
+    }
+    return schema
+  }
+
   @Test func refusesNewerSchema() async throws {
     let directory = try TemporaryDirectory()
     let url = directory.url.appending(path: "memories.sqlite")
