@@ -98,7 +98,7 @@ enum Schema {
   ) throws(MemoryStoreError) {
     try database.transaction { () throws(MemoryStoreError) in
       let existing = try database.userVersion
-      guard existing <= migrations.count else {
+      guard (0...migrations.count).contains(existing) else {
         throw .unsupportedSchemaVersion(existing)
       }
       guard existing < version else { return }

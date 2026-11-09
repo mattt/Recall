@@ -9,7 +9,8 @@ public enum MemoryStoreError: Error, Hashable, Sendable {
   /// The code is an extended SQLite result code.
   case sqlite(code: Int32, message: String)
 
-  /// The database has a schema version that is newer than this version of Recall supports.
+  /// The database has a schema version that this version of Recall doesn't support,
+  /// such as a newer version or an invalid negative one.
   case unsupportedSchemaVersion(Int)
 
   /// No memory has the identifier.
