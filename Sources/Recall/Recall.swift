@@ -224,6 +224,11 @@ extension MemoryStore {
   /// then merges the lists as ``RecallConfiguration`` describes.
   /// Before a vector search,
   /// the store embeds any memories that have no vector from the current embedder.
+  /// A memory that the store can't embed stays out of the vector list,
+  /// and keyword search can still find it.
+  /// The store remembers the failure for the memory's text and the embedder,
+  /// so later searches don't try it again.
+  /// To try it again, change the text or call ``reembed()``.
   ///
   /// - Parameters:
   ///   - query: Text that describes what to recall.
@@ -231,6 +236,10 @@ extension MemoryStore {
   ///   - configuration: The settings for ranking.
   /// - Returns: Results with the highest score first.
   ///   Equal scores put newer memories first.
+  /// - Throws: ``MemoryStoreError/invalidConfiguration(_:)`` if the configuration isn't valid,
+  ///   `CancellationError` if the task is canceled,
+  ///   or the embedder's error if the embedder can't embed the query
+  ///   or keeps failing for stale memories.
   public func recall(
     _ query: String,
     limit: Int = 10,

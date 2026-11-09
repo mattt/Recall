@@ -81,11 +81,16 @@ struct FailingEmbedder: EmbedderSource {
 struct SelectivelyFailingEmbedder: EmbedderSource {
   let base: TestEmbedder
   let failing: Set<String>
+  /// The texts that failed, in order.
+  let failures = CallCounter()
 
   var identifier: String { base.identifier }
 
   func embed(_ text: String, for purpose: EmbeddingPurpose) async throws -> [Float] {
-    if failing.contains(text) { throw FailingEmbedder.Failure() }
+    if failing.contains(text) {
+      failures.record(text, purpose)
+      throw FailingEmbedder.Failure()
+    }
     return try await base.embed(text, for: purpose)
   }
 }
