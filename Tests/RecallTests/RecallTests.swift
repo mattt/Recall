@@ -271,6 +271,7 @@ import Testing
     let store = try MemoryStore.inMemory(embedder: TestEmbedder())
     try await store.remember("tea")
     let results = try await store.recall("tea", configuration: configuration)
+    #expect(!results.isEmpty)
     #expect(results.allSatisfy { $0.score.isFinite })
   }
 
