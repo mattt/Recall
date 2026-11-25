@@ -135,7 +135,9 @@ public actor MemoryStore {
     guard let existing = try self.memory(memory.id) else {
       throw MemoryStoreError.notFound(memory.id)
     }
-    let vector = existing.text == memory.text ? nil : try await embedding(for: memory.text)
+    // Match the SQLite trigger, which compares the stored bytes.
+    let textChanged = !existing.text.utf8.elementsEqual(memory.text.utf8)
+    let vector = textChanged ? try await embedding(for: memory.text) : nil
     try database.cancellableTransaction { () throws(MemoryStoreError) in
       let rowid = try save(memory)
       if let vector { try saveEmbedding(vector, rowid: rowid) }
@@ -158,7 +160,7 @@ public actor MemoryStore {
     try Task.checkCancellation()
     try Self.validate(text)
     guard let existing = try memory(id) else { throw MemoryStoreError.notFound(id) }
-    if existing.text != text {
+    if !existing.text.utf8.elementsEqual(text.utf8) {
       let vector = try await embedding(for: text)
       try database.cancellableTransaction { () throws(MemoryStoreError) in
         try database.prepare("UPDATE memories SET text = ? WHERE id = ?")
@@ -542,10 +544,10 @@ public actor MemoryStore {
 
   /// Returns whether the row still holds the memory with this identifier and text.
   private func isCurrent(_ row: StaleRow) throws(MemoryStoreError) -> Bool {
-    let statement = try database.prepare("SELECT id, text FROM memories WHERE rowid = ?")
-    try statement.bind(.integer(row.rowid))
-    guard try statement.step() else { return false }
-    return statement.text(at: 0) == row.id && statement.text(at: 1) == row.text
+    let statement = try database.prepare(
+      "SELECT 1 FROM memories WHERE rowid = ? AND id = ? AND text = ?")
+    try statement.bind(.integer(row.rowid), .text(row.id), .text(row.text))
+    return try statement.step()
   }
 
   /// Returns the identifiers of the memories whose vectors are most similar to the vector of `query`,

@@ -125,6 +125,24 @@ import Testing
     #expect(embedder.calls.all == ["dogs"])
   }
 
+  @Test func updatesKeepTheRequestedUTF8() async throws {
+    let composed = "caf\u{e9}"
+    let decomposed = "cafe\u{301}"
+    let embedder = TestEmbedder()
+    let store = try MemoryStore.inMemory(embedder: embedder)
+    var memory = try await store.remember(composed)
+    memory.text = decomposed
+    let updated = try await store.update(memory)
+    #expect(updated.text.utf8.elementsEqual(decomposed.utf8))
+    #expect(try await store.staleEmbeddingCount() == 0)
+
+    try await store.update(memory.id, text: composed)
+    let saved = try #require(try await store.memory(memory.id))
+    #expect(saved.text.utf8.elementsEqual(composed.utf8))
+    let expectedInputs = [composed, decomposed, composed].map { Array($0.utf8) }
+    #expect(embedder.calls.all.map { Array($0.utf8) } == expectedInputs)
+  }
+
   @Test func forgettingDeletesVectorsFromEveryEmbedder() async throws {
     let directory = try TemporaryDirectory()
     let url = directory.url.appending(path: "memories.sqlite")
@@ -252,6 +270,24 @@ extension MemoryStore {
     let results = try await store.vectorSearch("query", limit: 1)
     #expect(results.first?.id == memory.id)
     #expect(try #require(results.first?.similarity) > 0.99)
+  }
+
+  @Test func reembeddingSkipsTextWithChangedUTF8() async throws {
+    let directory = try TemporaryDirectory()
+    let url = directory.url.appending(path: "memories.sqlite")
+    let writer = try MemoryStore(url: url)
+    let composed = "caf\u{e9}"
+    var memory = try await writer.remember(composed)
+    let gate = Gate()
+    let store = try MemoryStore(url: url, embedder: GatedEmbedder(gates: [composed: gate]))
+    let pass = Task { try await store.reembed() }
+    await gate.arrival()
+    memory.text = "cafe\u{301}"
+    try await writer.update(memory)
+    gate.open()
+
+    #expect(try await pass.value == 0)
+    #expect(try await store.staleEmbeddingCount() == 1)
   }
 
   @Test func reembeddingSkipsMemoryForgottenByAnotherConnection() async throws {
